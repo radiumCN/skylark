@@ -392,7 +392,7 @@ export default {
     domesticDnsResolver: "Domestic DNS Resolver",
     domesticDnsResolverDesc: "Used for directly connected domains; supports IP (e.g. 223.5.5.5), DoH (https://…), DoT (tls://…)",
     enableIpv6: "Enable IPv6",
-    enableIpv6Desc: "When enabled, dual-stack resolution (IPv4 preferred) and IPv6 traffic takeover; disabled by default for IPv4-only",
+    enableIpv6Desc: "When on, proxied traffic supports IPv6 (domestic/direct stays IPv4-only so broken local IPv6 can't break Chinese sites); off by default for IPv4-only egress",
     profiles: "Config Profiles",
     profilesDesc: "Save multiple setups (subscriptions / rules / mode snapshots) and switch with one click; takes effect on the next proxy start",
     profileNamePlaceholder: "Profile name (e.g. Home / Work)",

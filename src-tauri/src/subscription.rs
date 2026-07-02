@@ -1620,7 +1620,25 @@ fn build_dns_rules(
     server_domains: Vec<Value>,
     cn_core_domains: &[Value],
     user_rules: &[crate::rules::RouteRule],
+    enable_ipv6: bool,
 ) -> Vec<Value> {
+    // Domestic / direct traffic is dialled over the LOCAL network, whose IPv6 path to
+    // Chinese destinations is frequently broken or dead even when the ISP advertises
+    // IPv6 (a very common home-network state). If we let the domestic resolver hand out
+    // AAAA records, clients race to those v6 addresses (Happy Eyeballs) and many CN sites
+    // hang or fail. So when IPv6 is on we still pin every dns_local (direct) rule to
+    // `ipv4_only`; IPv6 stays enabled only for PROXIED traffic (fake-ip inet6 range →
+    // the exit node performs the real dual-stack lookup). When IPv6 is off the global
+    // `ipv4_only` strategy already covers this, so the per-rule tag is a harmless no-op.
+    //
+    // `strategy` on a DNS route rule is supported in the pinned sing-box 1.13.x (it is
+    // deprecated from 1.14 and removed in 1.16 — revisit if the kernel is bumped that far).
+    let add_v4_only = |entry: &mut serde_json::Map<String, Value>| {
+        if enable_ipv6 {
+            entry.insert("strategy".into(), json!("ipv4_only"));
+        }
+    };
+
     // Build domain_suffix entries from user-defined DIRECT rules so that those
     // domains are also resolved via dns_local (real IP), not fakeip.
     let mut user_direct_domain_suffixes: Vec<Value> = Vec::new();
@@ -1636,10 +1654,20 @@ fn build_dns_rules(
 
     let mut dns_rules: Vec<Value> = Vec::new();
     if !server_domains.is_empty() {
-        dns_rules.push(json!({ "domain": server_domains, "server": "dns_local" }));
+        let mut entry = serde_json::Map::new();
+        entry.insert("domain".into(), json!(server_domains));
+        entry.insert("server".into(), json!("dns_local"));
+        add_v4_only(&mut entry);
+        dns_rules.push(Value::Object(entry));
     }
     // Explicit CN core domains — reliable even without geosite-cn.srs
-    dns_rules.push(json!({ "domain_suffix": cn_core_domains, "server": "dns_local" }));
+    {
+        let mut entry = serde_json::Map::new();
+        entry.insert("domain_suffix".into(), json!(cn_core_domains));
+        entry.insert("server".into(), json!("dns_local"));
+        add_v4_only(&mut entry);
+        dns_rules.push(Value::Object(entry));
+    }
     // User-defined direct rules
     if !user_direct_domain_suffixes.is_empty() || !user_direct_domains.is_empty() {
         let mut entry = serde_json::Map::new();
@@ -1650,9 +1678,16 @@ fn build_dns_rules(
             entry.insert("domain".into(), json!(user_direct_domains));
         }
         entry.insert("server".into(), json!("dns_local"));
+        add_v4_only(&mut entry);
         dns_rules.push(Value::Object(entry));
     }
-    dns_rules.push(json!({ "rule_set": "geosite-cn", "server": "dns_local" }));
+    {
+        let mut entry = serde_json::Map::new();
+        entry.insert("rule_set".into(), json!("geosite-cn"));
+        entry.insert("server".into(), json!("dns_local"));
+        add_v4_only(&mut entry);
+        dns_rules.push(Value::Object(entry));
+    }
     dns_rules.push(json!({
         "query_type": ["A", "AAAA"],
         "server": "dns_fakeip"
@@ -1805,17 +1840,23 @@ fn build_inbounds(config: &crate::types::AppConfig) -> Vec<Value> {
     inbounds
 }
 
-/// Build the TUN inbound. An IPv6 address (and thus IPv6 routes) is only assigned when
-/// IPv6 is enabled. On Windows a unique per-start interface name avoids WinTun collisions
-/// with adapters orphaned by a previous crash.
-fn build_tun_inbound(config: &crate::types::AppConfig) -> Value {
-    // Only assign an IPv6 TUN address (and thus add IPv6 routes) when IPv6 is enabled;
-    // otherwise stay IPv4-only so no v6 traffic is captured by the tunnel.
-    let tun_address = if config.enable_ipv6 {
-        json!(["172.19.0.1/30", "fdfe:dcba:9876::1/126"])
-    } else {
-        json!(["172.19.0.1/30"])
-    };
+/// Build the TUN inbound. The TUN is ALWAYS dual-stack (IPv4 + IPv6 address), regardless of
+/// the `enable_ipv6` toggle. On Windows a unique per-start interface name avoids WinTun
+/// collisions with adapters orphaned by a previous crash.
+fn build_tun_inbound(_config: &crate::types::AppConfig) -> Value {
+    // Always assign an IPv6 TUN address so the tunnel stays dual-stack even when the IPv6
+    // feature is "off". This is deliberate: `strict_route: true` makes any address family
+    // NOT present on the TUN "unreachable" (sing-box docs: "Let unsupported network
+    // unreachable"). An IPv4-only TUN therefore black-holes ALL IPv6 — including the
+    // `::1` loopback that `localhost` resolves to on modern Windows — so local dev servers
+    // (e.g. http://localhost:7777) became unreachable whenever IPv6 was disabled.
+    //
+    // Keeping the TUN dual-stack fixes that without weakening strict_route's DNS-leak
+    // protection. The `enable_ipv6` toggle now gates IPv6 purely at the DNS layer: when
+    // off, the resolver hands out no global AAAA (global `ipv4_only` + IPv4-only fake-ip),
+    // so apps never initiate global IPv6 out the tunnel; loopback / ULA / link-local v6
+    // still works because those match the `ip_is_private → direct` route rule.
+    let tun_address = json!(["172.19.0.1/30", "fdfe:dcba:9876::1/126"]);
     // `mut` is only exercised on Windows, where a unique interface_name is injected below;
     // on macOS/Linux that block is cfg'd out, so the binding is never mutated there.
     #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
@@ -1930,7 +1971,7 @@ pub fn build_singbox_config(
     let user_rules = crate::rules::load_rules();
     let rule_providers = crate::rules::load_rule_providers();
 
-    let dns_rules = build_dns_rules(server_domains, &cn_core_domains, &user_rules);
+    let dns_rules = build_dns_rules(server_domains, &cn_core_domains, &user_rules, config.enable_ipv6);
     let (route_rules, provider_rule_sets) =
         build_route_rules(&cn_core_domains, &user_rules, &rule_providers);
     let inbounds = build_inbounds(config);
@@ -2418,14 +2459,38 @@ mod tests {
     fn build_dns_rules_priority_and_fakeip_last() {
         let server_domains = vec![Value::String("node.example.com".into())];
         let cn = vec![Value::String("qq.com".into())];
-        let rules = build_dns_rules(server_domains, &cn, &[]);
+        let rules = build_dns_rules(server_domains, &cn, &[], false);
         // First rule routes proxy-server hostnames to the real resolver.
         assert_eq!(rules[0]["domain"][0], "node.example.com");
         assert_eq!(rules[0]["server"], "dns_local");
+        // With IPv6 off the global ipv4_only strategy already covers direct rules, so
+        // no per-rule strategy tag is emitted.
+        assert!(rules[0]["strategy"].is_null());
         // Last rule is the A/AAAA → fake-ip catch-all.
         let last = rules.last().unwrap();
         assert_eq!(last["server"], "dns_fakeip");
         assert_eq!(last["query_type"][0], "A");
+    }
+
+    #[test]
+    fn build_dns_rules_pin_direct_to_ipv4_when_ipv6_on() {
+        let server_domains = vec![Value::String("node.example.com".into())];
+        let cn = vec![Value::String("qq.com".into())];
+        let rules = build_dns_rules(server_domains, &cn, &[], true);
+        // Every dns_local (direct/CN) rule must be pinned to ipv4_only so domestic sites
+        // never race to a broken local IPv6 path when IPv6 is enabled for proxied traffic.
+        for r in &rules {
+            if r["server"] == "dns_local" {
+                assert_eq!(
+                    r["strategy"], "ipv4_only",
+                    "direct rule must force ipv4_only when IPv6 is on: {r}"
+                );
+            }
+        }
+        // The fake-ip catch-all stays dual-stack (proxied traffic keeps IPv6).
+        let last = rules.last().unwrap();
+        assert_eq!(last["server"], "dns_fakeip");
+        assert!(last["strategy"].is_null());
     }
 
     #[test]
@@ -2514,16 +2579,23 @@ mod tests {
     }
 
     #[test]
-    fn build_tun_inbound_ipv6_gated() {
+    fn build_tun_inbound_always_dual_stack() {
+        // The TUN must be dual-stack irrespective of the IPv6 toggle: an IPv4-only TUN
+        // with strict_route black-holes IPv6 (incl. ::1 loopback), breaking localhost.
         let mut cfg = crate::types::AppConfig::default();
         cfg.enable_ipv6 = false;
-        let v4 = build_tun_inbound(&cfg);
-        assert_eq!(v4["address"].as_array().unwrap().len(), 1, "IPv4-only address");
-        assert_eq!(v4["mtu"], 9000);
+        let off = build_tun_inbound(&cfg);
+        assert_eq!(
+            off["address"].as_array().unwrap().len(),
+            2,
+            "TUN must stay dual-stack even when IPv6 is off"
+        );
+        assert_eq!(off["mtu"], 9000);
+        assert_eq!(off["strict_route"], true);
 
         cfg.enable_ipv6 = true;
-        let dual = build_tun_inbound(&cfg);
-        assert_eq!(dual["address"].as_array().unwrap().len(), 2, "dual-stack address");
+        let on = build_tun_inbound(&cfg);
+        assert_eq!(on["address"].as_array().unwrap().len(), 2, "dual-stack address");
     }
 
     // ─── N2: node filtering / region grouping ──────────────────────────

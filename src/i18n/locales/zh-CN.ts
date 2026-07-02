@@ -393,7 +393,7 @@ export default {
     domesticDnsResolver: "国内 DNS 解析器",
     domesticDnsResolverDesc: "直连域名使用；支持 IP（如 223.5.5.5）、DoH（https://…）、DoT（tls://…）",
     enableIpv6: "启用 IPv6",
-    enableIpv6Desc: "开启后双栈解析（优先 IPv4）并接管 IPv6 流量；默认关闭为纯 IPv4",
+    enableIpv6Desc: "开启后代理流量支持 IPv6（国内直连仍强制 IPv4，避免本地 IPv6 不通导致国内网站打不开）；默认关闭为纯 IPv4 出网",
     profiles: "配置 Profile",
     profilesDesc: "保存多套设置（订阅 / 规则 / 模式快照），一键切换；切换后下次启动代理生效",
     profileNamePlaceholder: "Profile 名称（如：家庭 / 公司）",

@@ -107,7 +107,62 @@ pub fn parse_subscription(
         SubType::Sip008 => parse_sip008(content, sub_id),
         SubType::Unknown => Err(anyhow!("无法识别的订阅格式")),
     }?;
-    Ok(strip_info_placeholder_nodes(nodes, outbounds))
+    let (nodes, outbounds) = strip_info_placeholder_nodes(nodes, outbounds);
+    Ok(sanitize_and_dedupe_tags(nodes, outbounds))
+}
+
+/// Sanitize + de-duplicate outbound tags derived from (untrusted) airport data. sing-box
+/// aborts on a config whose outbound tags are duplicated, empty, or collide with a built-in
+/// tag ("duplicate tag" → the core never binds the Clash API port → "控制端口未就绪"), and
+/// airport subs routinely ship repeated names, blank names, or names like "direct". Rename
+/// collisions to "<name> 2", "<name> 3", … and keep each node's display name EQUAL to its
+/// outbound tag so selection / grouping stay coherent.
+///
+/// Requires nodes and outbounds to be INDEX-ALIGNED (node[i] ↔ outbounds[i]); every parser
+/// upholds this (parse_clash only pushes a node when its outbound exists, and
+/// strip_info_placeholder_nodes removes the same names from both lists).
+fn sanitize_and_dedupe_tags(
+    nodes: Vec<ProxyNode>,
+    outbounds: Vec<Value>,
+) -> (Vec<ProxyNode>, Vec<Value>) {
+    use std::collections::HashSet;
+    // Tags the generated config always defines itself — a node may never reuse them.
+    let mut used: HashSet<String> =
+        ["proxy", "direct", "block", "auto"].iter().map(|s| s.to_string()).collect();
+
+    let mut out_nodes: Vec<ProxyNode> = Vec::with_capacity(nodes.len());
+    let mut out_obs: Vec<Value> = Vec::with_capacity(outbounds.len());
+
+    for (mut node, mut ob) in nodes.into_iter().zip(outbounds.into_iter()) {
+        // Drop entries that can never dial: an outbound with an explicitly empty `server`
+        // or a zero `server_port` stays in the config but silently fails every connection.
+        // (Conservative: only drop on an explicit ""/0 so outbound types that legitimately
+        // omit `server`/`server_port` — e.g. WireGuard — are kept.)
+        if matches!(ob.get("server").and_then(|s| s.as_str()), Some("")) {
+            continue;
+        }
+        if matches!(ob.get("server_port").and_then(|p| p.as_u64()), Some(0)) {
+            continue;
+        }
+
+        let base = ob.get("tag").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
+        let base = if base.is_empty() { "节点".to_string() } else { base };
+        let mut tag = base.clone();
+        let mut n = 2u32;
+        while used.contains(&tag) {
+            tag = format!("{} {}", base, n);
+            n += 1;
+        }
+        used.insert(tag.clone());
+
+        node.name = tag.clone();
+        if let Some(map) = ob.as_object_mut() {
+            map.insert("tag".into(), Value::String(tag));
+        }
+        out_nodes.push(node);
+        out_obs.push(ob);
+    }
+    (out_nodes, out_obs)
 }
 
 /// Airport (机场) subscriptions routinely inject non-server "info" entries as fake nodes
@@ -296,10 +351,14 @@ fn parse_clash(content: &str, sub_id: &str) -> Result<(Vec<ProxyNode>, Vec<Value
             is_active: false,
             subscription_id: Some(sub_id.to_string()),
         };
-        nodes.push(node);
 
+        // Push the node ONLY when it produced a usable outbound, so `nodes` and `outbounds`
+        // stay index-aligned (node[i] ↔ outbounds[i]) — a precondition of the dedupe pass in
+        // `parse_subscription`. A proxy of an unsupported type yields no outbound and would be
+        // an unselectable dead node anyway, so dropping it is correct.
         if let Some(outbound) = clash_yaml_proxy_to_singbox(proxy, &name) {
             outbounds.push(outbound);
+            nodes.push(node);
         }
     }
 
@@ -1688,11 +1747,49 @@ fn build_dns_rules(
         add_v4_only(&mut entry);
         dns_rules.push(Value::Object(entry));
     }
+    // Foreign HTTPS/SVCB queries (DNS type 64 = SVCB, 65 = HTTPS) — browsers send these
+    // for ECH / HTTP-3 / IP hints. Everything reaching this rule is foreign (CN domains
+    // already matched the domain rules above, regardless of query type, so they keep their
+    // real HTTPS RR). Without this rule those foreign queries fall through to
+    // `final: dns_local` and get resolved by the DOMESTIC resolver (e.g. 223.5.5.5): that
+    // leaks the foreign hostname to a CN resolver and risks poisoned/empty answers that
+    // break ECH or slow the first connection. Refuse them (REFUSED) so the client falls
+    // back to plain A/AAAA — which go to fake-ip below and are proxied normally.
+    dns_rules.push(json!({
+        "query_type": [64, 65],
+        "action": "reject",
+        "method": "default"
+    }));
     dns_rules.push(json!({
         "query_type": ["A", "AAAA"],
         "server": "dns_fakeip"
     }));
     dns_rules
+}
+
+/// Build one sing-box `rule_set` definition. Prefers the locally bundled `.srs` (copied to
+/// the app data dir on startup — works offline and behind the GFW); if that file is absent,
+/// falls back to downloading it THROUGH THE PROXY (`download_detour: "proxy"`, reachable once
+/// the tunnel is up) — never "direct", which fails behind the GFW.
+fn rule_set_entry(tag: &str, file: &str, url: &str) -> Value {
+    let path = crate::config::rule_sets_dir().join(file);
+    if path.exists() {
+        json!({
+            "type": "local",
+            "tag": tag,
+            "format": "binary",
+            "path": path.to_string_lossy().replace('\\', "/")
+        })
+    } else {
+        json!({
+            "type": "remote",
+            "tag": tag,
+            "format": "binary",
+            "url": url,
+            "download_detour": "proxy",
+            "update_interval": "7d"
+        })
+    }
 }
 
 /// Build the `route.rules` array plus the remote `rule_set` definitions contributed by
@@ -1722,7 +1819,14 @@ fn build_route_rules(
         json!({ "domain_suffix": cn_core_domains, "outbound": "direct" }),
     ];
 
-    // Inject user-defined routing rules (domain/keyword/process matchers only).
+    // Inject user-defined routing rules. Within one sing-box rule the domain*/ip_cidr
+    // matchers share an OR group, AND-ed with (port) and network — matching the "any of
+    // these locators, action X" intent of a single-category rule.
+    //
+    // NOTE: `geosite` / `geoip` matchers are NOT emitted. sing-box 1.12+ removed the inline
+    // geosite/geoip route fields in favour of `rule_set`; emitting them would abort startup.
+    // Wiring each tag to a downloaded `rule_set` is the correct fix but is tracked separately
+    // (a nonexistent tag's remote fetch can fail startup, so it needs on-device validation).
     for rule in user_rules.iter().filter(|r| r.enabled) {
         let mut obj = serde_json::Map::new();
         if !rule.domain.is_empty() {
@@ -1733,6 +1837,16 @@ fn build_route_rules(
         }
         if !rule.domain_keyword.is_empty() {
             obj.insert("domain_keyword".into(), json!(rule.domain_keyword));
+        }
+        if !rule.ip_cidr.is_empty() {
+            obj.insert("ip_cidr".into(), json!(rule.ip_cidr));
+        }
+        // network: tcp/udp only (sing-box also accepts icmp, but the UI models tcp/udp).
+        if let Some(net) = rule.network.as_deref() {
+            let net = net.trim();
+            if net == "tcp" || net == "udp" {
+                obj.insert("network".into(), json!(net));
+            }
         }
         if !rule.process_name.is_empty() {
             obj.insert("process_name".into(), json!(rule.process_name));
@@ -1907,31 +2021,7 @@ pub fn build_singbox_config(
         .partition(|ob| ob.get("type").and_then(|t| t.as_str()) == Some("wireguard"));
 
     // ── Rule-sets ──────────────────────────────────────────────────────
-    // Prefer the locally bundled .srs files (copied to the app data dir on
-    // startup). They work offline and in regions where jsDelivr/GitHub are
-    // blocked. If a file is somehow missing, fall back to downloading it
-    // THROUGH THE PROXY (download_detour: "proxy"), which is reachable once the
-    // tunnel is up — never via "direct", which fails behind the GFW.
-    let rule_set_entry = |tag: &str, file: &str, url: &str| -> Value {
-        let path = crate::config::rule_sets_dir().join(file);
-        if path.exists() {
-            json!({
-                "type": "local",
-                "tag": tag,
-                "format": "binary",
-                "path": path.to_string_lossy().replace('\\', "/")
-            })
-        } else {
-            json!({
-                "type": "remote",
-                "tag": tag,
-                "format": "binary",
-                "url": url,
-                "download_detour": "proxy",
-                "update_interval": "7d"
-            })
-        }
-    };
+    // Prefer the locally bundled .srs files; fall back to remote (see `rule_set_entry`).
     let geosite_cn_rs = rule_set_entry(
         "geosite-cn", "geosite-cn.srs",
         "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
@@ -2068,6 +2158,47 @@ mod tests {
     /** Encode a raw JSON payload as a `vmess://<base64>` link. */
     fn vmess_link(payload: &str) -> String {
         format!("vmess://{}", general_purpose::STANDARD.encode(payload))
+    }
+
+    fn mk_node_ob(name: &str, server: &str) -> (ProxyNode, Value) {
+        let node = ProxyNode {
+            id: name.to_string(), name: name.to_string(), group: "默认".into(),
+            protocol: "vmess".into(), server: server.into(), port: 443,
+            latency: None, download_speed: None, is_active: false,
+            subscription_id: Some("s".into()),
+        };
+        (node, json!({ "type": "vmess", "tag": name, "server": server, "server_port": 443 }))
+    }
+
+    #[test]
+    fn sanitize_and_dedupe_tags_makes_tags_unique_and_safe() {
+        let (n1, o1) = mk_node_ob("HK", "a.com");
+        let (n2, o2) = mk_node_ob("HK", "b.com");        // duplicate name
+        let (n3, o3) = mk_node_ob("direct", "c.com");    // collides with built-in tag
+        let (n4, o4) = mk_node_ob("", "d.com");          // empty name
+        let (n5, o5) = mk_node_ob("gone", "");           // empty server → dropped
+        let (n6, mut o6v) = mk_node_ob("port0", "e.com"); // zero port → dropped
+        o6v["server_port"] = json!(0);
+        let (nodes, obs) = sanitize_and_dedupe_tags(
+            vec![n1, n2, n3, n4, n5, n6],
+            vec![o1, o2, o3, o4, o5, o6v],
+        );
+
+        // The empty-server and zero-port entries are dropped; the rest survive.
+        assert_eq!(nodes.len(), 4);
+        assert_eq!(obs.len(), 4);
+        // node.name stays in lock-step with the outbound tag at every index.
+        for (node, ob) in nodes.iter().zip(obs.iter()) {
+            assert_eq!(node.name, ob["tag"].as_str().unwrap());
+        }
+        // All tags are unique and none collides with a reserved built-in tag.
+        let tags: Vec<&str> = obs.iter().map(|o| o["tag"].as_str().unwrap()).collect();
+        let uniq: std::collections::HashSet<&str> = tags.iter().copied().collect();
+        assert_eq!(tags.len(), uniq.len(), "tags must be unique: {tags:?}");
+        assert_eq!(tags[0], "HK");
+        assert_eq!(tags[1], "HK 2");
+        assert_eq!(tags[2], "direct 2", "must not reuse the built-in 'direct' tag");
+        assert_eq!(tags[3], "节点");
     }
 
     #[test]
@@ -2470,6 +2601,17 @@ mod tests {
         let last = rules.last().unwrap();
         assert_eq!(last["server"], "dns_fakeip");
         assert_eq!(last["query_type"][0], "A");
+        // Foreign HTTPS/SVCB (type 64/65) must be refused so the domain is never leaked
+        // to the domestic resolver via `final: dns_local`.
+        let reject = rules.iter().find(|r| r["action"] == "reject").expect("reject rule present");
+        assert_eq!(reject["query_type"], json!([64, 65]));
+        assert_eq!(reject["method"], "default");
+        // It must sit AFTER the CN dns_local rules (so CN domains keep their real HTTPS RR)
+        // and BEFORE the fake-ip catch-all.
+        let reject_idx = rules.iter().position(|r| r["action"] == "reject").unwrap();
+        let fakeip_idx = rules.iter().position(|r| r["server"] == "dns_fakeip").unwrap();
+        assert!(reject_idx < fakeip_idx);
+        assert!(rules[..reject_idx].iter().all(|r| r["server"] == "dns_local"));
     }
 
     #[test]
@@ -2503,6 +2645,23 @@ mod tests {
         assert_eq!(rules[n - 2]["rule_set"][0], "geosite-cn");
         assert_eq!(rules[n - 1]["rule_set"][0], "geoip-cn");
         assert!(providers.is_empty(), "no providers ⇒ no provider rule-sets");
+    }
+
+    #[test]
+    fn build_route_rules_emits_ip_cidr_and_network() {
+        let cn = vec![Value::String("qq.com".into())];
+        let mut r = crate::rules::RouteRule::new_empty("lan", crate::rules::RuleAction::Direct);
+        r.ip_cidr = vec!["10.0.0.0/8".into()];
+        r.network = Some("udp".into());
+        let mut r2 = crate::rules::RouteRule::new_empty("blk", crate::rules::RuleAction::Block);
+        r2.domain_suffix = vec!["ads.example".into()];
+        let (rules, _) = build_route_rules(&cn, &[r, r2], &[]);
+
+        let ipr = rules.iter().find(|x| x["ip_cidr"][0] == "10.0.0.0/8").expect("ip_cidr rule emitted");
+        assert_eq!(ipr["network"], "udp");
+        assert_eq!(ipr["outbound"], "direct");
+        let blk = rules.iter().find(|x| x["domain_suffix"][0] == "ads.example").expect("domain rule emitted");
+        assert_eq!(blk["outbound"], "block");
     }
 
     #[test]

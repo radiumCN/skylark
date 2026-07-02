@@ -131,14 +131,24 @@ const TUN_SUDOERS_PATH: &str = "/etc/sudoers.d/skylark";
 /// (non-elevated) GUI process — inside the elevated install script `whoami` would be `root`.
 #[cfg(target_os = "macos")]
 fn current_username() -> Option<String> {
+    // The name is later interpolated into a shell script + a sudoers line, so it MUST be a
+    // plain login name — reject anything with whitespace/quotes/shell metacharacters so a
+    // hostile $USER can't inject into either. Valid macOS short names are already a subset
+    // of this charset.
+    fn valid(name: &str) -> Option<String> {
+        let ok = !name.is_empty()
+            && name != "root"
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'));
+        ok.then(|| name.to_string())
+    }
     if let Ok(u) = std::env::var("USER") {
-        if !u.is_empty() && u != "root" {
+        if let Some(u) = valid(u.trim()) {
             return Some(u);
         }
     }
     let out = std::process::Command::new("id").arg("-un").output().ok()?;
     let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!name.is_empty() && name != "root").then_some(name)
+    valid(&name)
 }
 
 /// True when the privileged TUN service is installed AND usable: the user can run the

@@ -120,6 +120,14 @@ pub struct SingboxState {
     /// decide whether a mode switch needs a config rebuild + restart (TUN) or can be
     /// applied without touching the core (system-proxy toggle on a persistent core).
     pub tun_mode: bool,
+    /// Set true by `stop_singbox` right before it signals the core, so the process-exit
+    /// waiter can tell an INTENTIONAL stop from an unexpected crash. Reset on the next start.
+    pub stopping: bool,
+    /// Monotonic start counter. Each `start_singbox` bumps it and the spawned waiter captures
+    /// its value; when the waiter later observes a DIFFERENT epoch it knows a newer core has
+    /// superseded it (a fast restart) and must neither clobber the new core's state nor
+    /// report a crash. Closes the stop→start race around crash detection.
+    pub epoch: u64,
 }
 
 impl Default for SingboxState {
@@ -131,6 +139,8 @@ impl Default for SingboxState {
             version: None,
             logs: Vec::new(),
             tun_mode: false,
+            stopping: false,
+            epoch: 0,
         }
     }
 }
@@ -170,6 +180,34 @@ pub async fn get_version(binary_path: &std::path::Path) -> Result<String> {
         .unwrap_or("unknown")
         .to_string();
     Ok(version)
+}
+
+/// Validate a generated config with `sing-box check -c <path>` before launching. Catches
+/// semantic errors (duplicate outbound tag, unknown/removed fields, malformed rules) up
+/// front and returns the core's OWN stderr, instead of letting the core spawn, silently
+/// exit, and surface only as a generic "控制端口未就绪" readiness timeout. `check` needs no
+/// privileges, so the user-owned binary is used even for a TUN start.
+async fn check_config(binary: &std::path::Path, config_path: &std::path::Path) -> Result<()> {
+    let mut cmd = TokioCommand::new(binary);
+    cmd.args(["check", "-c", config_path.to_str().unwrap_or("")])
+        .stdin(std::process::Stdio::null());
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    let output = cmd
+        .output()
+        .await
+        .map_err(|e| anyhow!("无法运行 sing-box check：{}", e))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    // Surface the last few stderr lines — the concrete reason (e.g. "duplicate tag: xxx").
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let lines: Vec<&str> = stderr.lines().filter(|l| !l.trim().is_empty()).collect();
+    let tail = lines[lines.len().saturating_sub(6)..].join("\n");
+    Err(anyhow!(
+        "配置校验失败（sing-box check）：\n{}",
+        if tail.trim().is_empty() { "未知错误".to_string() } else { tail }
+    ))
 }
 
 /// Kill any orphaned sing-box.exe processes left over from a previous run or app update.
@@ -262,7 +300,7 @@ async fn wait_until_ready(api_port: u16, state: &SharedState) -> bool {
         {
             return true;
         }
-        let running = state.lock().unwrap().running;
+        let running = state.lock().unwrap_or_else(|e| e.into_inner()).running;
         if running {
             saw_running = true;
         } else if saw_running {
@@ -285,7 +323,7 @@ pub async fn start_singbox(
     tun_mode: bool,
 ) -> Result<()> {
     {
-        let s = state.lock().unwrap();
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
         if s.running {
             return Err(anyhow!("sing-box 已在运行中"));
         }
@@ -301,6 +339,12 @@ pub async fn start_singbox(
 
     let binary = singbox_binary_path()?;
     let config_path = config_path.to_path_buf();
+
+    // Statically validate the generated config BEFORE launching. This turns a semantic
+    // error (duplicate outbound tag, unknown field, bad rule) into an explicit, actionable
+    // message instead of an opaque "控制端口未就绪" timeout after the core silently exits.
+    check_config(&binary, &config_path).await?;
+
     let state_clone = state.clone();
     let app_log = app_handle.clone();
 
@@ -333,7 +377,10 @@ pub async fn start_singbox(
         // core robust against any relative default sing-box might use.
         cmd.current_dir(crate::config::app_data_dir())
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
+            // sing-box logs to stderr; stdout is unused. Discard it rather than pipe it —
+            // a piped-but-never-read stdout would block the core if it ever filled the
+            // (~64KB) pipe buffer. stderr is piped and drained below for the log view.
+            .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped());
         // CREATE_NEW_PROCESS_GROUP puts the core in its own console process group so a
         // graceful CTRL+BREAK can be targeted at JUST the core (see send_graceful_break),
@@ -350,13 +397,18 @@ pub async fn start_singbox(
         };
 
         let pid = child.id();
-        {
-            let mut s = state_clone.lock().unwrap();
+        // Capture this core's epoch so the exit handler below can detect whether a newer
+        // core has since superseded it (fast restart) and must not report a crash.
+        let my_epoch = {
+            let mut s = state_clone.lock().unwrap_or_else(|e| e.into_inner());
             s.running = true;
             s.pid = pid;
             s.start_time = Some(Instant::now());
             s.tun_mode = tun_mode;
-        }
+            s.stopping = false;
+            s.epoch = s.epoch.wrapping_add(1);
+            s.epoch
+        };
 
         // Read stderr for logs. Each line is (a) appended to the in-memory ring buffer,
         // (b) optionally appended to today's rolling log file (crash-safe persistence),
@@ -380,7 +432,7 @@ pub async fn start_singbox(
                         let _ = writeln!(f, "{}", line);
                     }
                     {
-                        let mut s = state_log.lock().unwrap();
+                        let mut s = state_log.lock().unwrap_or_else(|e| e.into_inner());
                         s.logs.push(line.clone());
                         if s.logs.len() > 1000 {
                             s.logs.drain(0..100);
@@ -392,11 +444,34 @@ pub async fn start_singbox(
         }
 
         let _ = child.wait().await;
-        let mut s = state_clone.lock().unwrap();
-        s.running = false;
-        s.pid = None;
-        s.start_time = None;
-        s.tun_mode = false;
+        // The core has exited. Decide what this exit means under the state lock:
+        //   • superseded → a newer core (higher epoch) already replaced us; do NOTHING so we
+        //     don't clobber the new core's state or fire a spurious crash.
+        //   • intentional (`stopping`) → a normal stop/restart; just clear our own state.
+        //   • otherwise → an UNEXPECTED exit (crash / killed / config died): clear state and
+        //     signal the crash so the caller can drop the now-dead system proxy and notify.
+        let crashed = {
+            let mut s = state_clone.lock().unwrap_or_else(|e| e.into_inner());
+            let superseded = s.epoch != my_epoch;
+            if superseded {
+                false
+            } else {
+                let unexpected = !s.stopping;
+                s.running = false;
+                s.pid = None;
+                s.start_time = None;
+                s.tun_mode = false;
+                unexpected
+            }
+        };
+        if crashed {
+            // The system proxy (if on) now points at a dead port → total black-hole. Clear it
+            // so traffic falls back to direct (fail-open), and tell the UI to reconcile. We do
+            // NOT auto-restart here to avoid a crash loop; the user/frontend can re-enable.
+            let _ = crate::proxy::set_system_proxy(false, 0, false);
+            log::error!("sing-box 意外退出（非主动停止）");
+            let _ = app_log.emit("singbox-crashed", ());
+        }
     });
 
     // Confirm the core actually came up: the Clash API control port must accept a
@@ -409,12 +484,15 @@ pub async fn start_singbox(
         // Capture the core's own last log lines — the real reason (bad config, "address
         // already in use", TUN adapter create failure) is here, not in our generic guess.
         let tail = {
-            let s = state.lock().unwrap();
+            let s = state.lock().unwrap_or_else(|e| e.into_inner());
             s.logs.iter().rev().take(8).rev().cloned().collect::<Vec<_>>().join("\n")
         };
+        // Mark this as an intentional teardown so the waiter treats the core's exit as a
+        // failed START (reported via the Err below), not a runtime crash.
+        state.lock().unwrap_or_else(|e| e.into_inner()).stopping = true;
         let _ = kill_orphan_singbox().await;
         {
-            let mut s = state.lock().unwrap();
+            let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
             s.running = false;
             s.pid = None;
             s.start_time = None;
@@ -443,7 +521,10 @@ pub async fn start_singbox(
 /// `tasklist` process on every poll (the old approach cost up to ~3s).
 pub async fn stop_singbox(state: SharedState, graceful: bool) -> Result<()> {
     let pid = {
-        let s = state.lock().unwrap();
+        // Mark the coming exit as intentional BEFORE signalling the core, so the process-exit
+        // waiter reports it as a normal stop rather than a crash (no proxy clear / crash event).
+        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+        s.stopping = true;
         s.pid
     };
 
@@ -463,7 +544,7 @@ pub async fn stop_singbox(state: SharedState, graceful: bool) -> Result<()> {
                     // spawn) up to ~3s, returning as soon as the core has actually exited.
                     for _ in 0..60 {
                         tokio::time::sleep(Duration::from_millis(50)).await;
-                        if !state.lock().unwrap().running {
+                        if !state.lock().unwrap_or_else(|e| e.into_inner()).running {
                             exited = true;
                             break;
                         }
@@ -495,7 +576,7 @@ pub async fn stop_singbox(state: SharedState, graceful: bool) -> Result<()> {
                 let mut exited = false;
                 for _ in 0..60 {
                     tokio::time::sleep(Duration::from_millis(50)).await;
-                    if !state.lock().unwrap().running {
+                    if !state.lock().unwrap_or_else(|e| e.into_inner()).running {
                         exited = true;
                         break;
                     }
@@ -523,7 +604,7 @@ pub async fn stop_singbox(state: SharedState, graceful: bool) -> Result<()> {
             if graceful {
                 for _ in 0..30 {
                     tokio::time::sleep(Duration::from_millis(50)).await;
-                    if !state.lock().unwrap().running {
+                    if !state.lock().unwrap_or_else(|e| e.into_inner()).running {
                         break;
                     }
                 }
@@ -531,7 +612,7 @@ pub async fn stop_singbox(state: SharedState, graceful: bool) -> Result<()> {
         }
     }
 
-    let mut s = state.lock().unwrap();
+    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
     s.running = false;
     s.pid = None;
     s.start_time = None;
@@ -543,7 +624,8 @@ pub async fn stop_singbox(state: SharedState, graceful: bool) -> Result<()> {
 /// Fetch connections from Clash API
 pub async fn fetch_connections(api_port: u16) -> Result<Vec<crate::types::ConnectionInfo>> {
     let url = format!("http://127.0.0.1:{}/connections", api_port);
-    let client = reqwest::Client::new();
+    // Local Clash API call — bypass any env-var HTTP(S)_PROXY so it always goes direct.
+    let client = reqwest::Client::builder().no_proxy().build()?;
     let resp = client.get(&url)
         .bearer_auth(crate::config::api_secret())
         .timeout(Duration::from_secs(2))
@@ -587,7 +669,8 @@ pub async fn fetch_connections(api_port: u16) -> Result<Vec<crate::types::Connec
 /// Close a single active connection via the Clash API (`DELETE /connections/{id}`).
 pub async fn close_connection(api_port: u16, id: &str) -> Result<()> {
     let url = format!("http://127.0.0.1:{}/connections/{}", api_port, id);
-    let client = reqwest::Client::new();
+    // Local Clash API call — bypass any env-var HTTP(S)_PROXY so it always goes direct.
+    let client = reqwest::Client::builder().no_proxy().build()?;
     client.delete(&url)
         .bearer_auth(crate::config::api_secret())
         .timeout(Duration::from_secs(3))
@@ -600,7 +683,8 @@ pub async fn close_connection(api_port: u16, id: &str) -> Result<()> {
 /// Close all active connections via the Clash API (`DELETE /connections`).
 pub async fn close_all_connections(api_port: u16) -> Result<()> {
     let url = format!("http://127.0.0.1:{}/connections", api_port);
-    let client = reqwest::Client::new();
+    // Local Clash API call — bypass any env-var HTTP(S)_PROXY so it always goes direct.
+    let client = reqwest::Client::builder().no_proxy().build()?;
     client.delete(&url)
         .bearer_auth(crate::config::api_secret())
         .timeout(Duration::from_secs(3))

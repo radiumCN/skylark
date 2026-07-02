@@ -279,6 +279,10 @@ pub async fn download_singbox(
 ) -> Result<()> {
     use tokio::io::AsyncWriteExt;
 
+    // Only ever download over TLS — a plain-http asset URL could be MITM'd to swap the binary.
+    if !download_url.starts_with("https://") {
+        return Err(anyhow!("拒绝非 HTTPS 下载地址：{}", download_url));
+    }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .user_agent(concat!("skylark/", env!("CARGO_PKG_VERSION")))
@@ -813,6 +817,11 @@ pub async fn download_and_install_app(
 ) -> Result<()> {
     use tokio::io::AsyncWriteExt;
 
+    // Only ever download the installer over TLS — a plain-http URL could be MITM'd to swap
+    // the executable that we are about to run.
+    if !download_url.starts_with("https://") {
+        return Err(anyhow!("拒绝非 HTTPS 下载地址：{}", download_url));
+    }
     // Bypass system proxy (which points to sing-box itself) to avoid circular dependency.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
@@ -899,7 +908,7 @@ pub async fn download_and_install_app(
         use tauri::Manager;
         let state = app_handle.state::<crate::commands::AppState>();
         was_tun = {
-            let s = state.singbox_state.lock().unwrap();
+            let s = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner());
             s.running && s.tun_mode
         };
         update_log(&format!("teardown: begin, was_tun={}", was_tun));

@@ -1,8 +1,29 @@
 use std::path::PathBuf;
 use std::fs;
 use anyhow::Result;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use crate::types::{AppConfig, Subscription, ProxyNode};
+
+/// Read + parse a JSON config file. A MISSING file yields `T::default()` (the normal first
+/// run). A file that EXISTS but fails to parse is preserved as `<name>.corrupt` — rather than
+/// being silently overwritten by the next atomic save — and `T::default()` is returned, so a
+/// disk-level corruption or a bad hand-edit can be recovered instead of silently wiping the
+/// user's data.
+fn load_json_or_default<T: DeserializeOwned + Default>(path: &std::path::Path) -> T {
+    let Ok(data) = fs::read_to_string(path) else {
+        return T::default();
+    };
+    match serde_json::from_str::<T>(&data) {
+        Ok(v) => v,
+        Err(e) => {
+            let bak = path.with_extension("corrupt");
+            let _ = fs::rename(path, &bak);
+            log::error!("配置 {:?} 解析失败（{}）；已备份为 {:?} 并回退默认值", path, e, bak);
+            T::default()
+        }
+    }
+}
 
 /// User-Agent used when fetching subscriptions. Many airports gate the returned content
 /// on the client UA: a legacy "Clash" identifier (e.g. `ClashForWindows`) makes
@@ -54,6 +75,26 @@ pub fn ensure_dirs() -> Result<()> {
     Ok(())
 }
 
+/// Write `data` to `path` atomically: write a sibling temp file, then rename it over the
+/// target. `fs::write` truncates the target in place, so a crash/kill mid-write leaves a
+/// half-written file behind — which `load_*`'s `unwrap_or_default()` then reads as invalid
+/// JSON and silently resets to defaults, wiping every saved subscription / node / setting.
+/// The temp-then-rename keeps the previous good file intact until the new one is complete.
+/// `fs::rename` replaces the destination on both Windows (MoveFileEx REPLACE_EXISTING) and
+/// Unix, so this is a safe cross-platform swap.
+fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, data)?;
+    // These files hold node passwords / secrets. On Unix, restrict them to the owner (0600)
+    // so other local users can't read them (Windows app-data is already per-user ACL'd).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
+    }
+    fs::rename(&tmp, path)
+}
+
 /// Stable random secret guarding the Clash API (`external_controller`). Generated once
 /// on first use and persisted to a dedicated file (NOT app_config.json, which round-trips
 /// through the frontend and could otherwise be wiped on a settings save). Cached for the
@@ -92,13 +133,19 @@ fn detect_system_language() -> String {
 
 pub fn load_app_config() -> AppConfig {
     let path = app_data_dir().join("app_config.json");
-    if let Ok(data) = fs::read_to_string(&path) {
-        serde_json::from_str(&data).unwrap_or_default()
-    } else {
-        AppConfig {
-            language: detect_system_language(),
-            ..AppConfig::default()
-        }
+    match fs::read_to_string(&path) {
+        Ok(data) => match serde_json::from_str(&data) {
+            Ok(c) => c,
+            Err(e) => {
+                // Preserve the unparseable file for recovery instead of silently resetting.
+                let bak = path.with_extension("corrupt");
+                let _ = fs::rename(&path, &bak);
+                log::error!("app_config.json 解析失败（{}）；已备份为 {:?} 并回退默认值", e, bak);
+                AppConfig { language: detect_system_language(), ..AppConfig::default() }
+            }
+        },
+        // Missing file → normal first run.
+        Err(_) => AppConfig { language: detect_system_language(), ..AppConfig::default() },
     }
 }
 
@@ -106,92 +153,89 @@ pub fn save_app_config(config: &AppConfig) -> Result<()> {
     ensure_dirs()?;
     let path = app_data_dir().join("app_config.json");
     let data = serde_json::to_string_pretty(config)?;
-    fs::write(path, data)?;
+    write_atomic(&path, data.as_bytes())?;
     Ok(())
 }
 
 pub fn load_subscriptions() -> Vec<Subscription> {
-    let path = app_data_dir().join("subscriptions.json");
-    if let Ok(data) = fs::read_to_string(&path) {
-        serde_json::from_str(&data).unwrap_or_default()
-    } else {
-        Vec::new()
-    }
+    load_json_or_default(&app_data_dir().join("subscriptions.json"))
 }
 
 pub fn save_subscriptions(subs: &[Subscription]) -> Result<()> {
     ensure_dirs()?;
     let path = app_data_dir().join("subscriptions.json");
     let data = serde_json::to_string_pretty(subs)?;
-    fs::write(path, data)?;
+    write_atomic(&path, data.as_bytes())?;
     Ok(())
 }
 
 pub fn load_nodes() -> Vec<ProxyNode> {
-    let path = app_data_dir().join("nodes.json");
-    if let Ok(data) = fs::read_to_string(&path) {
-        serde_json::from_str(&data).unwrap_or_default()
-    } else {
-        Vec::new()
-    }
+    load_json_or_default(&app_data_dir().join("nodes.json"))
 }
 
 pub fn save_nodes(nodes: &[ProxyNode]) -> Result<()> {
     ensure_dirs()?;
     let path = app_data_dir().join("nodes.json");
     let data = serde_json::to_string_pretty(nodes)?;
-    fs::write(path, data)?;
+    write_atomic(&path, data.as_bytes())?;
     Ok(())
 }
 
 pub fn load_outbounds() -> Vec<Value> {
-    let path = app_data_dir().join("outbounds.json");
-    if let Ok(data) = fs::read_to_string(&path) {
-        serde_json::from_str(&data).unwrap_or_default()
-    } else {
-        Vec::new()
-    }
+    load_json_or_default(&app_data_dir().join("outbounds.json"))
 }
 
 pub fn save_outbounds(outbounds: &[Value]) -> Result<()> {
     ensure_dirs()?;
     let path = app_data_dir().join("outbounds.json");
     let data = serde_json::to_string_pretty(outbounds)?;
-    fs::write(path, data)?;
+    write_atomic(&path, data.as_bytes())?;
     Ok(())
 }
 
 pub fn load_proxy_groups() -> Vec<crate::types::ProxyGroup> {
-    let path = app_data_dir().join("proxy_groups.json");
-    if let Ok(data) = fs::read_to_string(&path) {
-        serde_json::from_str(&data).unwrap_or_default()
-    } else {
-        Vec::new()
-    }
+    load_json_or_default(&app_data_dir().join("proxy_groups.json"))
 }
 
 pub fn save_proxy_groups(groups: &[crate::types::ProxyGroup]) -> Result<()> {
     ensure_dirs()?;
     let path = app_data_dir().join("proxy_groups.json");
     let data = serde_json::to_string_pretty(groups)?;
-    fs::write(path, data)?;
+    write_atomic(&path, data.as_bytes())?;
     Ok(())
+}
+
+/// Guard the subscription `id` before using it as a filename component. Ids are
+/// backend-generated UUIDs, but they cross the frontend command boundary (delete / load),
+/// so reject anything that isn't a plain slug to prevent path traversal (e.g. `../../…`)
+/// out of the subscriptions dir.
+fn is_safe_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Cache the raw text content of a subscription so it can be re-parsed on startup.
 pub fn save_subscription_content(id: &str, content: &str) -> Result<()> {
+    if !is_safe_id(id) {
+        return Err(anyhow::anyhow!("非法订阅 ID"));
+    }
     ensure_dirs()?;
     let path = subscriptions_dir().join(format!("{}.txt", id));
-    fs::write(path, content)?;
+    write_atomic(&path, content.as_bytes())?;
     Ok(())
 }
 
 pub fn load_subscription_content(id: &str) -> Option<String> {
+    if !is_safe_id(id) {
+        return None;
+    }
     let path = subscriptions_dir().join(format!("{}.txt", id));
     fs::read_to_string(path).ok()
 }
 
 pub fn delete_subscription_content(id: &str) {
+    if !is_safe_id(id) {
+        return;
+    }
     let path = subscriptions_dir().join(format!("{}.txt", id));
     let _ = fs::remove_file(path);
 }

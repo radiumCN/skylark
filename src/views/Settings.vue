@@ -1465,7 +1465,7 @@ onUnmounted(() => {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 11px; font-weight: 500; padding: 2px 8px;
   border-radius: 100px;
-  background: rgba(124, 92, 236, 0.12); color: #7c5cec;
+  background: rgba(124, 92, 236, 0.12); color: var(--accent-violet);
 }
 
 .channel-select-wrap {

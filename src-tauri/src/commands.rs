@@ -50,6 +50,15 @@ pub struct TrayState {
 //     TUN switch still rebuilds the config and restarts the core. Turning TUN off drops
 //     the core back to the idle mixed-only state.
 
+/// Clear the system proxy, logging (not failing) if the OS refuses — e.g. a locked registry
+/// / gsettings error. The callers are all best-effort teardown paths, but a silent failure
+/// there is exactly what leaves a user "offline" with a dangling proxy, so make it traceable.
+fn clear_system_proxy_logged() {
+    if let Err(e) = proxy::set_system_proxy(false, 0, false) {
+        log::warn!("清除系统代理失败：{}", e);
+    }
+}
+
 /// Ensure the core is running in the requested TUN mode. Builds the matching config and
 /// (re)starts the core only when needed — when it is not running, or when the running
 /// instance was started in a different TUN mode. Does NOT touch the system proxy.
@@ -92,7 +101,7 @@ async fn ensure_core_inner(
     }
 
     let (running, current_tun) = {
-        let s = state.singbox_state.lock().unwrap();
+        let s = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner());
         (s.running, s.tun_mode)
     };
     // Already running in the desired mode → nothing to do.
@@ -102,16 +111,16 @@ async fn ensure_core_inner(
 
     // Persist the TUN flag first so the generated config matches the chosen mode.
     {
-        let mut cfg = state.app_config.lock().unwrap();
+        let mut cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
         cfg.tun_enabled = want_tun;
         let cfg_clone = cfg.clone();
         drop(cfg);
         let _ = config::save_app_config(&cfg_clone);
     }
 
-    let config = state.app_config.lock().unwrap().clone();
-    let outbounds = state.outbounds.lock().unwrap().clone();
-    let nodes = state.nodes.lock().unwrap().clone();
+    let config = state.app_config.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let active_tag = config.active_nodes.get("proxy").cloned();
 
     let singbox_cfg = subscription::build_singbox_config(
@@ -177,7 +186,7 @@ pub async fn cmd_start_singbox(
 ) -> Result<(), String> {
     // Map the legacy "start" entry point onto the persistent model: enable the proxy
     // in the mode implied by the saved config (TUN if configured, else system proxy).
-    let want_tun = state.app_config.lock().unwrap().tun_enabled;
+    let want_tun = state.app_config.lock().unwrap_or_else(|e| e.into_inner()).tun_enabled;
     apply_connection_mode(&app_handle, &state, if want_tun { "tun" } else { "system" }).await
 }
 
@@ -190,9 +199,9 @@ pub async fn cmd_stop_singbox(
     // Clearing the system proxy is enough for a system-proxy session; a TUN session
     // additionally needs the core rebuilt to idle, which the dashboard does via
     // setConnectionMode("off") → apply_connection_mode. Here we just clear + persist.
-    let _ = proxy::set_system_proxy(false, 0, false);
+    clear_system_proxy_logged();
     {
-        let mut cfg = state.app_config.lock().unwrap();
+        let mut cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
         cfg.last_proxy_running = false;
         cfg.last_system_proxy = false;
         let cfg_clone = cfg.clone();
@@ -220,17 +229,17 @@ pub async fn apply_connection_mode(
     let _guard = state.core_lock.lock().await;
 
     if mode == "off" {
-        let _ = proxy::set_system_proxy(false, 0, false);
+        clear_system_proxy_logged();
         // If TUN is active, return the core to the idle mixed-only state.
         let in_tun = {
-            let s = state.singbox_state.lock().unwrap();
+            let s = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner());
             s.running && s.tun_mode
         };
         if in_tun {
             // Best-effort: failing to rebuild idle still leaves us with proxy cleared.
             let _ = ensure_core_inner(app_handle, state, false).await;
         }
-        let mut cfg = state.app_config.lock().unwrap();
+        let mut cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
         cfg.last_proxy_running = false;
         cfg.last_system_proxy = false;
         let cfg_clone = cfg.clone();
@@ -240,13 +249,13 @@ pub async fn apply_connection_mode(
     }
 
     let want_tun = mode == "tun";
-    let prev_tun = state.app_config.lock().unwrap().tun_enabled;
+    let prev_tun = state.app_config.lock().unwrap_or_else(|e| e.into_inner()).tun_enabled;
 
     // Ensure the core is up in the right mode (instant when only the system proxy changes).
     if let Err(e) = ensure_core_inner(app_handle, state, want_tun).await {
         // Roll back the TUN flag if ensure_core changed it but couldn't start.
-        if state.app_config.lock().unwrap().tun_enabled != prev_tun {
-            let mut cfg = state.app_config.lock().unwrap();
+        if state.app_config.lock().unwrap_or_else(|e| e.into_inner()).tun_enabled != prev_tun {
+            let mut cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
             cfg.tun_enabled = prev_tun;
             let cfg_clone = cfg.clone();
             drop(cfg);
@@ -259,16 +268,16 @@ pub async fn apply_connection_mode(
     let enable_sys_proxy = !want_tun;
     if enable_sys_proxy {
         let (port, global_mode) = {
-            let cfg = state.app_config.lock().unwrap();
+            let cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
             (cfg.mixed_port, cfg.proxy_mode == ProxyMode::Global)
         };
         proxy::set_system_proxy(true, port, global_mode).map_err(|e| e.to_string())?;
     } else {
-        let _ = proxy::set_system_proxy(false, 0, false);
+        clear_system_proxy_logged();
     }
 
     {
-        let mut cfg = state.app_config.lock().unwrap();
+        let mut cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
         cfg.last_proxy_running = true;
         cfg.last_system_proxy = enable_sys_proxy;
         let cfg_clone = cfg.clone();
@@ -323,11 +332,11 @@ pub async fn cmd_set_connection_mode(
 /// this by persisting an off-state on exit.
 pub async fn shutdown_core(state: &AppState) {
     let graceful = {
-        let s = state.singbox_state.lock().unwrap();
+        let s = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner());
         s.running && s.tun_mode
     };
     let _ = stop_singbox(state.singbox_state.clone(), graceful).await;
-    let _ = proxy::set_system_proxy(false, 0, false);
+    clear_system_proxy_logged();
 }
 
 /// Like `shutdown_core` but ALWAYS force-kills the core — never the graceful Ctrl+C path.
@@ -339,14 +348,14 @@ pub async fn shutdown_core(state: &AppState) {
 /// `tun::cleanup_stale_tun_adapter` — so a force kill is both safe and avoids self-termination.
 pub async fn shutdown_core_forced(state: &AppState) {
     let _ = stop_singbox(state.singbox_state.clone(), false).await;
-    let _ = proxy::set_system_proxy(false, 0, false);
+    clear_system_proxy_logged();
 }
 
 #[tauri::command]
 pub fn cmd_get_singbox_status(
     state: State<'_, AppState>,
 ) -> SingboxStatus {
-    let s = state.singbox_state.lock().unwrap();
+    let s = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner());
     SingboxStatus {
         running: s.running,
         uptime: s.start_time.map(|t| t.elapsed().as_secs()),
@@ -357,7 +366,7 @@ pub fn cmd_get_singbox_status(
 
 #[tauri::command]
 pub fn cmd_get_logs(state: State<'_, AppState>) -> Vec<String> {
-    state.singbox_state.lock().unwrap().logs.clone()
+    state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).logs.clone()
 }
 
 /// Export the current in-memory logs to a timestamped `.log` file under the app data
@@ -365,7 +374,7 @@ pub fn cmd_get_logs(state: State<'_, AppState>) -> Vec<String> {
 /// opener plugin. Returns an error if there is nothing to export.
 #[tauri::command]
 pub fn cmd_export_logs(state: State<'_, AppState>) -> Result<String, String> {
-    let logs = state.singbox_state.lock().unwrap().logs.clone();
+    let logs = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).logs.clone();
     if logs.is_empty() {
         return Err("暂无日志可导出".to_string());
     }
@@ -386,10 +395,10 @@ const CONFIG_BUNDLE_FORMAT: &str = "skylark-config";
 /// proxy groups, routing rules). Shared by config export and named profiles. The Clash
 /// API secret is intentionally excluded — it is machine-local and regenerated on demand.
 fn build_config_bundle(state: &AppState) -> Value {
-    let app_config = state.app_config.lock().unwrap().clone();
-    let subscriptions = state.subscriptions.lock().unwrap().clone();
-    let nodes = state.nodes.lock().unwrap().clone();
-    let outbounds = state.outbounds.lock().unwrap().clone();
+    let app_config = state.app_config.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let subscriptions = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let proxy_groups = config::load_proxy_groups();
     let rules = crate::rules::load_rules();
 
@@ -440,7 +449,7 @@ fn apply_config_bundle(bundle: &Value, state: &AppState) -> Result<(), String> {
     }
     if let Some(v) = bundle.get("app_config") {
         if let Ok(cfg) = serde_json::from_value::<AppConfig>(v.clone()) {
-            let mut guard = state.app_config.lock().unwrap();
+            let mut guard = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
             let merged = merge_runtime_fields(cfg, &guard);
             config::save_app_config(&merged).map_err(|e| e.to_string())?;
             *guard = merged;
@@ -449,19 +458,19 @@ fn apply_config_bundle(bundle: &Value, state: &AppState) -> Result<(), String> {
     if let Some(v) = bundle.get("subscriptions") {
         if let Ok(subs) = serde_json::from_value::<Vec<Subscription>>(v.clone()) {
             config::save_subscriptions(&subs).map_err(|e| e.to_string())?;
-            *state.subscriptions.lock().unwrap() = subs;
+            *state.subscriptions.lock().unwrap_or_else(|e| e.into_inner()) = subs;
         }
     }
     if let Some(v) = bundle.get("nodes") {
         if let Ok(ns) = serde_json::from_value::<Vec<ProxyNode>>(v.clone()) {
             config::save_nodes(&ns).map_err(|e| e.to_string())?;
-            *state.nodes.lock().unwrap() = ns;
+            *state.nodes.lock().unwrap_or_else(|e| e.into_inner()) = ns;
         }
     }
     if let Some(v) = bundle.get("outbounds") {
         if let Ok(obs) = serde_json::from_value::<Vec<Value>>(v.clone()) {
             config::save_outbounds(&obs).map_err(|e| e.to_string())?;
-            *state.outbounds.lock().unwrap() = obs;
+            *state.outbounds.lock().unwrap_or_else(|e| e.into_inner()) = obs;
         }
     }
     if let Some(v) = bundle.get("proxy_groups") {
@@ -584,7 +593,7 @@ pub fn cmd_delete_profile(name: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn cmd_get_subscriptions(state: State<'_, AppState>) -> Vec<Subscription> {
-    state.subscriptions.lock().unwrap().clone()
+    state.subscriptions.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 #[tauri::command]
@@ -598,7 +607,8 @@ pub async fn cmd_add_subscription(
 ) -> Result<Subscription, String> {
     let id = uuid::Uuid::new_v4().to_string();
     let group_by_region = group_by_region.unwrap_or(false);
-    let (content, userinfo) = fetch_url(&url).await.map_err(|e| e.to_string())?;
+    let proxy_port = active_proxy_port(&state);
+    let (content, userinfo) = fetch_url(&url, proxy_port).await.map_err(|e| e.to_string())?;
     config::save_subscription_content(&id, &content).map_err(|e| e.to_string())?;
     let sub_type = subscription::detect_sub_type(&content, &url);
     let (nodes, outbounds) = subscription::parse_subscription(&content, &id)
@@ -626,18 +636,18 @@ pub async fn cmd_add_subscription(
     };
 
     {
-        let mut subs = state.subscriptions.lock().unwrap();
+        let mut subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         subs.push(sub.clone());
         config::save_subscriptions(&subs).map_err(|e| e.to_string())?;
     }
     {
-        let mut all_nodes = state.nodes.lock().unwrap();
+        let mut all_nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
         all_nodes.retain(|n| n.subscription_id.as_deref() != Some(&id));
         all_nodes.extend(nodes);
         config::save_nodes(&all_nodes).map_err(|e| e.to_string())?;
     }
     {
-        let mut all_outbounds = state.outbounds.lock().unwrap();
+        let mut all_outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner());
         all_outbounds.retain(|ob| {
             !outbounds.iter().any(|new| new["tag"] == ob["tag"])
         });
@@ -689,18 +699,18 @@ pub async fn cmd_import_subscription_from_text(
     };
 
     {
-        let mut subs = state.subscriptions.lock().unwrap();
+        let mut subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         subs.push(sub.clone());
         config::save_subscriptions(&subs).map_err(|e| e.to_string())?;
     }
     {
-        let mut all_nodes = state.nodes.lock().unwrap();
+        let mut all_nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
         all_nodes.retain(|n| n.subscription_id.as_deref() != Some(&id));
         all_nodes.extend(nodes);
         config::save_nodes(&all_nodes).map_err(|e| e.to_string())?;
     }
     {
-        let mut all_outbounds = state.outbounds.lock().unwrap();
+        let mut all_outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner());
         all_outbounds.retain(|ob| {
             !outbounds.iter().any(|new| new["tag"] == ob["tag"])
         });
@@ -717,14 +727,15 @@ pub async fn cmd_update_subscription(
     state: State<'_, AppState>,
 ) -> Result<Subscription, String> {
     let (url, include, exclude, group_by_region) = {
-        let subs = state.subscriptions.lock().unwrap();
+        let subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         subs.iter()
             .find(|s| s.id == id)
             .map(|s| (s.url.clone(), s.include.clone(), s.exclude.clone(), s.group_by_region))
             .ok_or_else(|| "订阅不存在".to_string())?
     };
 
-    let (content, userinfo) = fetch_url(&url).await.map_err(|e| e.to_string())?;
+    let proxy_port = active_proxy_port(&state);
+    let (content, userinfo) = fetch_url(&url, proxy_port).await.map_err(|e| e.to_string())?;
     config::save_subscription_content(&id, &content).map_err(|e| e.to_string())?;
     let sub_type = subscription::detect_sub_type(&content, &url);
     let (nodes, outbounds) = subscription::parse_subscription(&content, &id)
@@ -734,7 +745,7 @@ pub async fn cmd_update_subscription(
     );
 
     let updated_sub = {
-        let mut subs = state.subscriptions.lock().unwrap();
+        let mut subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         let sub = subs.iter_mut()
             .find(|s| s.id == id)
             .ok_or_else(|| "订阅不存在".to_string())?;
@@ -753,13 +764,13 @@ pub async fn cmd_update_subscription(
     };
 
     {
-        let mut all_nodes = state.nodes.lock().unwrap();
+        let mut all_nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
         all_nodes.retain(|n| n.subscription_id.as_deref() != Some(&id));
         all_nodes.extend(nodes);
         config::save_nodes(&all_nodes).map_err(|e| e.to_string())?;
     }
     {
-        let mut all_outbounds = state.outbounds.lock().unwrap();
+        let mut all_outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner());
         let new_tags: std::collections::HashSet<String> = outbounds.iter()
             .filter_map(|ob| ob["tag"].as_str().map(|s| s.to_string()))
             .collect();
@@ -782,7 +793,7 @@ pub fn cmd_save_subscription_settings(
     update_interval: u32,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut subs = state.subscriptions.lock().unwrap();
+    let mut subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
     let sub = subs.iter_mut()
         .find(|s| s.id == id)
         .ok_or_else(|| "订阅不存在".to_string())?;
@@ -812,7 +823,7 @@ pub fn cmd_set_subscription_filters(
     let node_count = nodes.len();
 
     {
-        let mut subs = state.subscriptions.lock().unwrap();
+        let mut subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         let sub = subs.iter_mut()
             .find(|s| s.id == id)
             .ok_or_else(|| "订阅不存在".to_string())?;
@@ -823,13 +834,13 @@ pub fn cmd_set_subscription_filters(
         config::save_subscriptions(&subs).map_err(|e| e.to_string())?;
     }
     {
-        let mut all_nodes = state.nodes.lock().unwrap();
+        let mut all_nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
         all_nodes.retain(|n| n.subscription_id.as_deref() != Some(&id));
         all_nodes.extend(nodes);
         config::save_nodes(&all_nodes).map_err(|e| e.to_string())?;
     }
     {
-        let mut all_outbounds = state.outbounds.lock().unwrap();
+        let mut all_outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner());
         let new_tags: std::collections::HashSet<String> = outbounds.iter()
             .filter_map(|ob| ob["tag"].as_str().map(|s| s.to_string()))
             .collect();
@@ -850,17 +861,17 @@ pub fn cmd_delete_subscription(
 ) -> Result<(), String> {
     config::delete_subscription_content(&id);
     {
-        let mut subs = state.subscriptions.lock().unwrap();
+        let mut subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         subs.retain(|s| s.id != id);
         config::save_subscriptions(&subs).map_err(|e| e.to_string())?;
     }
     {
-        let mut nodes = state.nodes.lock().unwrap();
+        let mut nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
         nodes.retain(|n| n.subscription_id.as_deref() != Some(&id));
         config::save_nodes(&nodes).map_err(|e| e.to_string())?;
     }
     {
-        let mut outbounds = state.outbounds.lock().unwrap();
+        let mut outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner());
         outbounds.retain(|ob| {
             ob.get("subscription_id")
                 .and_then(|v| v.as_str())
@@ -876,7 +887,7 @@ pub fn cmd_delete_subscription(
 
 #[tauri::command]
 pub fn cmd_get_nodes(state: State<'_, AppState>) -> Vec<ProxyNode> {
-    state.nodes.lock().unwrap().clone()
+    state.nodes.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 #[tauri::command]
@@ -885,11 +896,11 @@ pub async fn cmd_test_node_latency(
     state: State<'_, AppState>,
 ) -> Result<u32, String> {
     let (name, server, port, api_port, test_url, is_running) = {
-        let nodes = state.nodes.lock().unwrap();
+        let nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
         let node = nodes.iter().find(|n| n.id == node_id)
             .ok_or_else(|| "节点不存在".to_string())?;
-        let cfg = state.app_config.lock().unwrap();
-        let running = state.singbox_state.lock().unwrap().running;
+        let cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
+        let running = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).running;
         let url = if cfg.auto_test_url.trim().is_empty() {
             "https://www.gstatic.com/generate_204".to_string()
         } else {
@@ -910,7 +921,7 @@ pub async fn cmd_test_node_latency(
 
     match latency_ms {
         Some(ms) => {
-            let mut nodes = state.nodes.lock().unwrap();
+            let mut nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(node) = nodes.iter_mut().find(|n| n.id == node_id) {
                 node.latency = Some(ms);
             }
@@ -918,7 +929,7 @@ pub async fn cmd_test_node_latency(
             Ok(ms)
         }
         None => {
-            let mut nodes = state.nodes.lock().unwrap();
+            let mut nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(node) = nodes.iter_mut().find(|n| n.id == node_id) {
                 node.latency = None;
             }
@@ -947,6 +958,9 @@ async fn clash_proxy_delay(api_port: u16, name: &str, test_url: &str) -> Option<
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
+        // Control-plane call to the local Clash API — never route it through an
+        // env-var HTTP(S)_PROXY the user might have set.
+        .no_proxy()
         .build()
         .ok()?;
     let resp = client.get(endpoint)
@@ -990,11 +1004,11 @@ pub async fn cmd_test_node_speed(
     state: State<'_, AppState>,
 ) -> Result<types::SpeedResult, String> {
     let (name, server, port, mixed_port, api_port, test_url, is_running) = {
-        let nodes = state.nodes.lock().unwrap();
+        let nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
         let node = nodes.iter().find(|n| n.id == node_id)
             .ok_or_else(|| "节点不存在".to_string())?;
-        let cfg = state.app_config.lock().unwrap();
-        let running = state.singbox_state.lock().unwrap().running;
+        let cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
+        let running = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).running;
         let url = if cfg.auto_test_url.trim().is_empty() {
             "https://www.gstatic.com/generate_204".to_string()
         } else {
@@ -1019,7 +1033,7 @@ pub async fn cmd_test_node_speed(
     };
 
     {
-        let mut nodes = state.nodes.lock().unwrap();
+        let mut nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(node) = nodes.iter_mut().find(|n| n.id == node_id) {
             node.latency = latency_ms;
             node.download_speed = download_kbps;
@@ -1055,6 +1069,7 @@ async fn clash_select_proxy(api_port: u16, group: &str, name: &str) -> Result<()
     let url = format!("http://127.0.0.1:{}/proxies/{}", api_port, group);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
+        .no_proxy()
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client
@@ -1081,9 +1096,9 @@ pub async fn cmd_test_group_delay(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let (api_port, running, test_url, members) = {
-        let cfg = state.app_config.lock().unwrap();
-        let running = state.singbox_state.lock().unwrap().running;
-        let nodes = state.nodes.lock().unwrap();
+        let cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
+        let running = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).running;
+        let nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
         let members: Vec<String> = if group == "auto" {
             nodes.iter().map(|n| n.name.clone()).collect()
         } else if let Some(sid) = group.strip_prefix("auto-") {
@@ -1111,14 +1126,25 @@ pub async fn cmd_test_group_delay(
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
+        .no_proxy()
         .build()
         .map_err(|e| e.to_string())?;
 
+    // Cap concurrent delay probes: each one makes the core dial the node, so testing a
+    // group of hundreds of nodes all at once would spike CPU / local bandwidth and open a
+    // flood of simultaneous connections. A small semaphore keeps it bounded while still
+    // finishing quickly.
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(16));
     let mut tasks = Vec::new();
     for tag in members {
         let client = client.clone();
         let url = test_url.clone();
+        let sem = sem.clone();
         tasks.push(tokio::spawn(async move {
+            let _permit = match sem.acquire().await {
+                Ok(p) => p,
+                Err(_) => return,
+            };
             // Build the endpoint with path-segment encoding so node names containing
             // spaces / unicode / slashes don't corrupt the request path.
             let mut endpoint = match reqwest::Url::parse(&format!(
@@ -1154,7 +1180,7 @@ pub async fn cmd_set_active_node(
     /* Collect everything that needs locks first, then drop the guards before any
        `.await` — std Mutex guards are not Send and cannot be held across await. */
     let (tag, api_port, running) = {
-        let mut nodes = state.nodes.lock().unwrap();
+        let mut nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
         let mut found_tag = None;
         for node in nodes.iter_mut() {
             if node.id == node_id {
@@ -1167,11 +1193,11 @@ pub async fn cmd_set_active_node(
         let tag = found_tag.ok_or_else(|| "节点不存在".to_string())?;
         config::save_nodes(&nodes).map_err(|e| e.to_string())?;
 
-        let mut config = state.app_config.lock().unwrap();
+        let mut config = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
         config.active_nodes.insert("proxy".to_string(), tag.clone());
         config::save_app_config(&config).map_err(|e| e.to_string())?;
         let api_port = config.api_port;
-        let running = state.singbox_state.lock().unwrap().running;
+        let running = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).running;
         (tag, api_port, running)
     };
 
@@ -1193,9 +1219,9 @@ async fn rebuild_and_restart_core(
     state: &AppState,
 ) -> Result<(), String> {
     let (config, outbounds, nodes) = {
-        let config = state.app_config.lock().unwrap().clone();
-        let outbounds = state.outbounds.lock().unwrap().clone();
-        let nodes = state.nodes.lock().unwrap().clone();
+        let config = state.app_config.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner()).clone();
         (config, outbounds, nodes)
     };
     let active_tag = config.active_nodes.get("proxy").cloned();
@@ -1211,7 +1237,7 @@ async fn rebuild_and_restart_core(
         .map_err(|e| e.to_string())?;
 
     let (running, current_tun) = {
-        let s = state.singbox_state.lock().unwrap();
+        let s = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner());
         (s.running, s.tun_mode)
     };
     if running {
@@ -1249,13 +1275,13 @@ pub async fn cmd_set_auto_node(
 ) -> Result<(), String> {
     let group = group.unwrap_or_else(|| "auto".to_string());
     {
-        let mut nodes = state.nodes.lock().unwrap();
+        let mut nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
         for node in nodes.iter_mut() {
             node.is_active = false;
         }
         config::save_nodes(&nodes).map_err(|e| e.to_string())?;
 
-        let mut config = state.app_config.lock().unwrap();
+        let mut config = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
         config.active_nodes.insert("proxy".to_string(), group.clone());
         config::save_app_config(&config).map_err(|e| e.to_string())?;
     }
@@ -1272,8 +1298,8 @@ pub async fn cmd_get_active_proxy_now(
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let (api_port, running) = {
-        let cfg = state.app_config.lock().unwrap();
-        let running = state.singbox_state.lock().unwrap().running;
+        let cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
+        let running = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).running;
         (cfg.api_port, running)
     };
     if !running {
@@ -1283,6 +1309,7 @@ pub async fn cmd_get_active_proxy_now(
     let url = format!("http://127.0.0.1:{}/proxies", api_port);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
+        .no_proxy()
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client.get(&url)
@@ -1319,7 +1346,7 @@ pub async fn cmd_get_active_proxy_now(
 
 #[tauri::command]
 pub fn cmd_get_app_config(state: State<'_, AppState>) -> AppConfig {
-    state.app_config.lock().unwrap().clone()
+    state.app_config.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 #[tauri::command]
@@ -1327,7 +1354,25 @@ pub fn cmd_save_app_config(
     new_config: AppConfig,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut guard = state.app_config.lock().unwrap();
+    // The mixed inbound and the Clash API control port are mandatory — a 0 (or the two
+    // colliding) makes the core fail to bind / start. http_port / socks_port may be 0
+    // (that intentionally disables the dedicated inbound), so they aren't checked here.
+    if new_config.mixed_port == 0 {
+        return Err("混合端口不能为 0".to_string());
+    }
+    if new_config.api_port == 0 {
+        return Err("控制端口不能为 0".to_string());
+    }
+    // The control port must not collide with any local inbound port (a 0 http/socks port
+    // means that inbound is disabled, so it can't conflict).
+    let ap = new_config.api_port;
+    if ap == new_config.mixed_port
+        || (new_config.http_port != 0 && ap == new_config.http_port)
+        || (new_config.socks_port != 0 && ap == new_config.socks_port)
+    {
+        return Err("控制端口不能与代理端口相同".to_string());
+    }
+    let mut guard = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
     let merged = merge_runtime_fields(new_config, &guard);
     config::save_app_config(&merged).map_err(|e| e.to_string())?;
     *guard = merged;
@@ -1343,6 +1388,7 @@ async fn clash_set_mode(api_port: u16, mode: &str) -> Result<(), String> {
     let url = format!("http://127.0.0.1:{}/configs", api_port);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
+        .no_proxy()
         .build()
         .map_err(|e| e.to_string())?;
     let resp = client
@@ -1373,10 +1419,10 @@ pub async fn cmd_set_proxy_mode(
     };
 
     let (api_port, running) = {
-        let mut config = state.app_config.lock().unwrap();
+        let mut config = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
         config.proxy_mode = proxy_mode.clone();
         config::save_app_config(&config).map_err(|e| e.to_string())?;
-        let running = state.singbox_state.lock().unwrap().running;
+        let running = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).running;
         (config.api_port, running)
     };
 
@@ -1399,7 +1445,7 @@ pub async fn cmd_set_proxy_mode(
     // mode right away instead of waiting for the next reconnect. No-op on macOS (no
     // per-domain bypass) and when the system proxy is off.
     let (mixed_port, tun_enabled) = {
-        let cfg = state.app_config.lock().unwrap();
+        let cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
         (cfg.mixed_port, cfg.tun_enabled)
     };
     if !tun_enabled && crate::proxy::get_system_proxy_status() {
@@ -1413,7 +1459,7 @@ pub async fn cmd_set_proxy_mode(
 pub async fn cmd_get_connections(
     state: State<'_, AppState>,
 ) -> Result<Vec<ConnectionInfo>, String> {
-    let port = state.app_config.lock().unwrap().api_port;
+    let port = state.app_config.lock().unwrap_or_else(|e| e.into_inner()).api_port;
     crate::singbox::fetch_connections(port)
         .await
         .map_err(|e| e.to_string())
@@ -1425,7 +1471,7 @@ pub async fn cmd_close_connection(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<(), String> {
-    let port = state.app_config.lock().unwrap().api_port;
+    let port = state.app_config.lock().unwrap_or_else(|e| e.into_inner()).api_port;
     crate::singbox::close_connection(port, &id)
         .await
         .map_err(|e| e.to_string())
@@ -1436,7 +1482,7 @@ pub async fn cmd_close_connection(
 pub async fn cmd_close_all_connections(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let port = state.app_config.lock().unwrap().api_port;
+    let port = state.app_config.lock().unwrap_or_else(|e| e.into_inner()).api_port;
     crate::singbox::close_all_connections(port)
         .await
         .map_err(|e| e.to_string())
@@ -1460,8 +1506,8 @@ pub async fn cmd_get_traffic_total(
     state: State<'_, AppState>,
 ) -> Result<TrafficTotal, String> {
     let (api_port, running) = {
-        let cfg = state.app_config.lock().unwrap();
-        let running = state.singbox_state.lock().unwrap().running;
+        let cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
+        let running = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).running;
         (cfg.api_port, running)
     };
     if !running {
@@ -1471,6 +1517,7 @@ pub async fn cmd_get_traffic_total(
     let url = format!("http://127.0.0.1:{}/connections", api_port);
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(3))
+        .no_proxy()
         .build()
     {
         Ok(c) => c,
@@ -1544,8 +1591,8 @@ fn parse_ipapi(body: &Value) -> (Option<String>, Option<String>, Option<String>,
 #[tauri::command]
 pub async fn cmd_run_diagnostics(state: State<'_, AppState>) -> Result<DiagnosticsResult, String> {
     let (mixed_port, running) = {
-        let cfg = state.app_config.lock().unwrap();
-        let running = state.singbox_state.lock().unwrap().running;
+        let cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
+        let running = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).running;
         (cfg.mixed_port, running)
     };
     if !running {
@@ -1865,16 +1912,16 @@ pub fn cmd_set_system_proxy(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     if enabled {
-        let running = state.singbox_state.lock().unwrap().running;
+        let running = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).running;
         if !running {
             return Err("sing-box 未运行，请先启动代理再开启系统代理".to_string());
         }
-        if state.app_config.lock().unwrap().tun_enabled {
+        if state.app_config.lock().unwrap_or_else(|e| e.into_inner()).tun_enabled {
             return Err("TUN 模式已接管全部流量，无需且不能再开启系统代理".to_string());
         }
     }
     let (port, global_mode) = {
-        let cfg = state.app_config.lock().unwrap();
+        let cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
         (cfg.mixed_port, cfg.proxy_mode == ProxyMode::Global)
     };
     crate::proxy::set_system_proxy(enabled, if enabled { port } else { 0 }, global_mode)
@@ -1915,7 +1962,7 @@ pub fn cmd_sync_tray_menu(
 /// or None if sing-box is not running or the query fails.
 #[tauri::command]
 pub fn cmd_get_memory_usage(state: State<AppState>) -> Option<u64> {
-    let pid = state.singbox_state.lock().unwrap().pid?;
+    let pid = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).pid?;
 
     #[cfg(target_os = "windows")]
     unsafe {
@@ -1991,11 +2038,40 @@ pub(crate) fn parse_userinfo(header: &str) -> SubUserinfo {
     info
 }
 
-async fn fetch_url(url: &str) -> Result<(String, SubUserinfo), anyhow::Error> {
-    let client = reqwest::Client::builder()
+/// The local mixed-inbound port to retry a failed direct subscription fetch through, or
+/// None when the core isn't running. Read without holding a lock across the later await.
+pub(crate) fn active_proxy_port(state: &AppState) -> Option<u16> {
+    let running = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).running;
+    running.then(|| state.app_config.lock().unwrap_or_else(|e| e.into_inner()).mixed_port)
+}
+
+/// Fetch a subscription. Tries a DIRECT fetch first (most airport hosts are directly
+/// reachable, and this needs no working tunnel); if that fails and the core is running,
+/// retries THROUGH the local mixed inbound so hosts only reachable via the proxy
+/// (GFW-blocked / geo-fenced direct) still update.
+pub(crate) async fn fetch_url(url: &str, proxy_port: Option<u16>) -> Result<(String, SubUserinfo), anyhow::Error> {
+    match fetch_url_via(url, None).await {
+        Ok(v) => Ok(v),
+        Err(direct_err) => match proxy_port {
+            Some(port) => fetch_url_via(url, Some(port)).await.map_err(|proxy_err| {
+                anyhow!("直连失败（{}）；经代理重试也失败（{}）", direct_err, proxy_err)
+            }),
+            None => Err(direct_err),
+        },
+    }
+}
+
+/// One subscription fetch attempt. `proxy_port = None` forces a truly direct request
+/// (bypassing any env-var proxy); `Some(port)` routes through `http://127.0.0.1:<port>`.
+async fn fetch_url_via(url: &str, proxy_port: Option<u16>) -> Result<(String, SubUserinfo), anyhow::Error> {
+    let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
-        .user_agent(config::subscription_user_agent())
-        .build()?;
+        .user_agent(config::subscription_user_agent());
+    builder = match proxy_port {
+        Some(port) => builder.proxy(reqwest::Proxy::all(format!("http://127.0.0.1:{}", port))?),
+        None => builder.no_proxy(),
+    };
+    let client = builder.build()?;
     let resp = client.get(url).send().await?;
     if !resp.status().is_success() {
         return Err(anyhow!("HTTP {}", resp.status()));

@@ -200,7 +200,7 @@ onMounted(load);
   width: 36px; height: 36px; border-radius: 9px; display: flex; align-items: center;
   justify-content: center; color: #fff; flex-shrink: 0;
 }
-.summary-icon.today { background: #7c5cec; }
+.summary-icon.today { background: var(--accent-violet); }
 .summary-icon.down { background: var(--color-success); }
 .summary-icon.up { background: var(--color-primary); }
 .summary-icon.total { background: #6b6b6b; }

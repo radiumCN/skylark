@@ -733,6 +733,16 @@ export const useAppStore = defineStore("app", () => {
     await listen<string>("connection-mode-error", (event) => {
       error.value = event.payload || "切换连接模式失败";
     });
+    // The core exited unexpectedly (crash / killed). The backend has already cleared the
+    // now-dead system proxy (fail-open to direct); reconcile the UI so it stops showing a
+    // live "connected" state, and surface the failure instead of silently black-holing.
+    await listen("singbox-crashed", async () => {
+      error.value = "内核意外退出，代理已停止（已恢复直连）。请重新开启代理。";
+      await fetchStatus();
+      await fetchConfig();
+      await refreshSystemProxy();
+      updateTrayTooltip();
+    });
   }
 
   return {

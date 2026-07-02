@@ -109,14 +109,14 @@ pub fn record_today(upload: u64, download: u64) {
     if upload == 0 && download == 0 {
         return;
     }
-    let mut guard = store().lock().unwrap();
+    let mut guard = store().lock().unwrap_or_else(|e| e.into_inner());
     guard.add_sample(&today(), upload, download);
     persist(&guard);
 }
 
 /// Recent daily history, oldest-first.
 pub fn history(days: usize) -> Vec<TrafficDay> {
-    store().lock().unwrap().recent(days)
+    store().lock().unwrap_or_else(|e| e.into_inner()).recent(days)
 }
 
 #[cfg(test)]

@@ -18,10 +18,10 @@ const logContainer = ref<HTMLElement | null>(null);
 let unlistenLog: UnlistenFn | null = null;
 
 const levelColors: Record<string, string> = {
-  error: "#d13438",
-  warn: "#ca5010",
-  info: "#4f6ef7",
-  debug: "#616161",
+  error: "var(--color-error)",
+  warn: "var(--color-attention)",
+  info: "var(--color-primary)",
+  debug: "var(--color-text-secondary)",
 };
 
 const parsedLogs = computed(() =>
@@ -182,7 +182,7 @@ onUnmounted(() => {
 }
 .log-line:hover { background: rgba(255,255,255,0.04); }
 .log-empty {
-  color: #616161;
+  color: var(--color-text-secondary);
   text-align: center;
   padding: 48px;
   font-family: 'Segoe UI', sans-serif;

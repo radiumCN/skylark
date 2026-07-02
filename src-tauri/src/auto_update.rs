@@ -73,7 +73,7 @@ pub async fn start_subscription_auto_updater(app_handle: tauri::AppHandle) {
         let state = app_handle.state::<crate::commands::AppState>();
 
         let to_update: Vec<(String, String, String)> = {
-            let subs = state.subscriptions.lock().unwrap();
+            let subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
             let now = chrono::Utc::now();
             subs.iter()
                 .filter(|s| s.auto_update && s.update_interval > 0)
@@ -111,29 +111,18 @@ async fn do_update_subscription(
     id: &str,
     url: &str,
 ) -> anyhow::Result<usize> {
-    let resp = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .user_agent(crate::config::subscription_user_agent())
-        .build()?
-        .get(url)
-        .send()
-        .await?;
-    // Parse the airport quota header before consuming the body (see commands::fetch_url).
-    let userinfo = resp.headers()
-        .get("subscription-userinfo")
-        .and_then(|v| v.to_str().ok())
-        .map(crate::commands::parse_userinfo)
-        .unwrap_or_default();
-    let content = resp.text().await?;
+    // Reuse the shared fetch (direct first, then retry through the local proxy for
+    // GFW-blocked airport hosts) so the background updater behaves like the manual one.
+    let state = app_handle.state::<crate::commands::AppState>();
+    let proxy_port = crate::commands::active_proxy_port(&state);
+    let (content, userinfo) = crate::commands::fetch_url(url, proxy_port).await?;
 
     crate::config::save_subscription_content(id, &content)?;
-
-    let state = app_handle.state::<crate::commands::AppState>();
     let sub_type = crate::subscription::detect_sub_type(&content, url);
     let (nodes, outbounds) = crate::subscription::parse_subscription(&content, id)?;
     // Apply the subscription's stored name filters / region grouping.
     let (include, exclude, group_by_region) = {
-        let subs = state.subscriptions.lock().unwrap();
+        let subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         subs.iter()
             .find(|s| s.id == id)
             .map(|s| (s.include.clone(), s.exclude.clone(), s.group_by_region))
@@ -149,7 +138,7 @@ async fn do_update_subscription(
     let node_count = nodes.len();
 
     {
-        let mut subs = state.subscriptions.lock().unwrap();
+        let mut subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(sub) = subs.iter_mut().find(|s| s.id == id) {
             sub.sub_type = sub_type;
             sub.node_count = nodes.len();
@@ -163,13 +152,13 @@ async fn do_update_subscription(
         crate::config::save_subscriptions(&subs)?;
     }
     {
-        let mut all_nodes = state.nodes.lock().unwrap();
+        let mut all_nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
         all_nodes.retain(|n| n.subscription_id.as_deref() != Some(id));
         all_nodes.extend(nodes);
         crate::config::save_nodes(&all_nodes)?;
     }
     {
-        let mut all_outbounds = state.outbounds.lock().unwrap();
+        let mut all_outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner());
         let new_tags: std::collections::HashSet<String> = outbounds.iter()
             .filter_map(|ob| ob["tag"].as_str().map(|s| s.to_string()))
             .collect();

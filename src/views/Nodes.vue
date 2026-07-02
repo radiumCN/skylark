@@ -133,9 +133,9 @@ function switchSub(id: string) {
 
 const latencyColor = (ms?: number) => {
   if (ms === undefined || ms === null) return "var(--color-text-muted)";
-  if (ms < 100) return "#107c10";
-  if (ms < 300) return "#ca5010";
-  return "#d13438";
+  if (ms < 100) return "var(--latency-good)";
+  if (ms < 300) return "var(--latency-mid)";
+  return "var(--latency-bad)";
 };
 
 const latencyLabel = (ms?: number) => {
@@ -145,9 +145,9 @@ const latencyLabel = (ms?: number) => {
 
 const speedColor = (kbps?: number) => {
   if (kbps === undefined || kbps === null) return "var(--color-text-muted)";
-  if (kbps >= 5120) return "#107c10";   // ≥ 5 MB/s
-  if (kbps >= 1024) return "#ca5010";   // ≥ 1 MB/s
-  return "#d13438";                      // < 1 MB/s
+  if (kbps >= 5120) return "var(--latency-good)";   // ≥ 5 MB/s
+  if (kbps >= 1024) return "var(--latency-mid)";    // ≥ 1 MB/s
+  return "var(--latency-bad)";                       // < 1 MB/s
 };
 
 const speedLabel = (kbps?: number) => {
@@ -517,12 +517,12 @@ const autoNowName = computed(() => store.activeNodeNow);
   border-color: rgba(193, 128, 30,0.6);
   background: rgba(193, 128, 30,0.08);
 }
-.auto-item .auto-icon { color: #b9770e; }
-.auto-item .auto-now { color: #b9770e; font-weight: 500; }
+.auto-item .auto-icon { color: var(--accent-amber); }
+.auto-item .auto-now { color: var(--accent-amber); font-weight: 500; }
 .node-left { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
 .active-indicator { flex-shrink: 0; }
 .check-icon { color: var(--color-primary); }
-.auto-icon { color: #b9770e; }
+.auto-icon { color: var(--accent-amber); }
 .check-placeholder { width: 16px; height: 16px; }
 .node-info { flex: 1; min-width: 0; }
 .node-name { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -546,7 +546,7 @@ const autoNowName = computed(() => store.activeNodeNow);
   display: flex; align-items: center; gap: 8px;
   padding: 8px 14px; border-radius: 8px; font-size: 12px;
   background: rgba(202,80,16,0.08); border: 1px solid rgba(202,80,16,0.2);
-  color: #ca5010;
+  color: var(--color-attention);
 }
 .speed-notice strong { color: var(--color-text); }
 
@@ -582,7 +582,7 @@ const autoNowName = computed(() => store.activeNodeNow);
 .group-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .group-badge {
   font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 100px;
-  background: rgba(193, 128, 30,0.14); color: #b9770e;
+  background: rgba(193, 128, 30,0.14); color: var(--accent-amber);
 }
 .group-members { font-size: 11px; color: var(--color-text-muted); margin-top: 2px; }
 .group-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }

@@ -29,7 +29,7 @@ fn sync_tray_checks(
     // whether the running core is in TUN mode — not merely whether the core is up.
     let state = app.state::<AppState>();
     let in_tun = {
-        let s = state.singbox_state.lock().unwrap();
+        let s = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner());
         s.running && s.tun_mode
     };
     let sys_on = crate::proxy::get_system_proxy_status();
@@ -43,8 +43,8 @@ fn sync_tray_checks(
 /// (`singbox_state`) rather than the persisted `tun_enabled` flag.
 fn sync_tray_from_state(app: &tauri::AppHandle) {
     let ts = app.state::<TrayState>();
-    let sys = ts.sys_proxy_item.lock().unwrap().clone();
-    let tun = ts.tun_item.lock().unwrap().clone();
+    let sys = ts.sys_proxy_item.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let tun = ts.tun_item.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let (Some(sys), Some(tun)) = (sys, tun) {
         sync_tray_checks(app, &sys, &tun);
     }
@@ -245,7 +245,7 @@ pub fn run() {
                         // updating it here is what makes the new version actually stick and
                         // keeps the heal a once-per-upgrade event.
                         let cfg_clone = {
-                            let mut c = state.app_config.lock().unwrap();
+                            let mut c = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
                             c.last_app_version = env!("CARGO_PKG_VERSION").to_string();
                             c.clone()
                         };
@@ -377,7 +377,7 @@ pub fn run() {
             let initial_sys_proxy = crate::proxy::get_system_proxy_status();
             let initial_tun = {
                 let state = app.state::<AppState>();
-                let tun = state.app_config.lock().unwrap().tun_enabled;
+                let tun = state.app_config.lock().unwrap_or_else(|e| e.into_inner()).tun_enabled;
                 tun
             };
 
@@ -404,8 +404,8 @@ pub fn run() {
             // Store handles in TrayState so commands can update check states
             {
                 let ts = app.state::<TrayState>();
-                *ts.sys_proxy_item.lock().unwrap() = Some(sys_proxy_item.clone());
-                *ts.tun_item.lock().unwrap()       = Some(tun_item.clone());
+                *ts.sys_proxy_item.lock().unwrap_or_else(|e| e.into_inner()) = Some(sys_proxy_item.clone());
+                *ts.tun_item.lock().unwrap_or_else(|e| e.into_inner())       = Some(tun_item.clone());
             }
 
             // Clone handles for use inside the event closure

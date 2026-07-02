@@ -76,7 +76,7 @@ function usagePercent(sub: SubLike): number | null {
 function usageColor(pct: number | null): string {
   if (pct == null) return "var(--color-primary)";
   if (pct >= 90) return "var(--color-error)";
-  if (pct >= 70) return "#ca5010";
+  if (pct >= 70) return "var(--color-attention)";
   return "var(--color-primary)";
 }
 
@@ -661,7 +661,7 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
   font-size: 11px; color: var(--color-text-secondary);
 }
 .meta-item.auto-hit {
-  color: #b9770e; font-weight: 500;
+  color: var(--accent-amber); font-weight: 500;
   background: rgba(193, 128, 30,0.12); padding: 1px 7px; border-radius: 10px;
 }
 .sub-url {

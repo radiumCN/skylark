@@ -484,10 +484,10 @@ onUnmounted(() => {
 .icon-green { background: var(--color-success-soft); color: var(--color-success); }
 .icon-blue,
 .icon-node { background: var(--color-primary-soft); color: var(--color-primary); }
-.icon-violet { background: rgba(124, 92, 236, 0.13); color: #7c5cec; }
-.icon-teal { background: rgba(14, 155, 142, 0.14); color: #0e9b8e; }
+.icon-violet { background: rgba(124, 92, 236, 0.13); color: var(--accent-violet); }
+.icon-teal { background: rgba(14, 155, 142, 0.14); color: var(--accent-teal); }
 .icon-amber,
-.icon-uptime { background: rgba(193, 128, 30, 0.14); color: #b9770e; }
+.icon-uptime { background: rgba(193, 128, 30, 0.14); color: var(--accent-amber); }
 
 .traffic-row {
   display: grid;

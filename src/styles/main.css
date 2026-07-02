@@ -75,6 +75,42 @@ html[data-theme="light"] {
   --color-text-muted: #9e9e9e;
 }
 
+/* App scale + semantic accent tokens. Kept in a plain :root (not @theme) so they stay
+   pure CSS variables consumed via var() in component styles, without generating Tailwind
+   utilities or colliding with Tailwind's reserved --text-*/--spacing namespaces. */
+:root {
+  /* Spacing — 4px grid. Use these instead of ad-hoc px so page rhythm stays uniform. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Type scale. */
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 20px;
+
+  /* Attention orange — the app's "warn / mid / caution" hue (distinct from the yellow
+     --color-warning). Single source for the many places that used a bare #ca5010. */
+  --color-attention: #ca5010;
+
+  /* Latency / speed tiers (good → bad), reusing the semantic palette + attention hue so
+     there is one source of truth per colour. */
+  --latency-good: var(--color-success);
+  --latency-mid: var(--color-attention);
+  --latency-bad: var(--color-error);
+
+  /* Decorative stat/icon accents (paired with a soft rgba background in components). */
+  --accent-violet: #7c5cec;
+  --accent-teal: #0e9b8e;
+  --accent-amber: #b9770e;
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;

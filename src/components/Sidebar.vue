@@ -176,7 +176,7 @@ onMounted(() => {
   height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
-  background: #9e9e9e;
+  background: var(--color-text-muted);
   transition: background 0.3s;
 }
 .status-dot.running {

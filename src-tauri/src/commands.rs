@@ -152,9 +152,14 @@ async fn ensure_core_inner(
         .map_err(|e| e.to_string())?;
 
     // Make app config the source of truth for routing mode (the core may have a stale
-    // value cached from a previous session).
+    // value cached from a previous session — cache_file persists the last mode and the
+    // core boots into it, ignoring default_mode). Verify-and-retry so the live mode can't
+    // silently diverge from config.proxy_mode; log (don't fail the bring-up) if it never
+    // takes, since the core itself is already up.
     if let Some(m) = clash_mode_str(&config.proxy_mode) {
-        let _ = clash_set_mode(config.api_port, m).await;
+        if let Err(e) = clash_set_mode_verified(config.api_port, m).await {
+            log::warn!("核心启动后同步代理模式失败：{}", e);
+        }
     }
 
     Ok(())
@@ -1252,7 +1257,9 @@ async fn rebuild_and_restart_core(
         .await
         .map_err(|e| e.to_string())?;
         if let Some(m) = clash_mode_str(&config.proxy_mode) {
-            let _ = clash_set_mode(config.api_port, m).await;
+            if let Err(e) = clash_set_mode_verified(config.api_port, m).await {
+                log::warn!("核心重建后同步代理模式失败：{}", e);
+            }
         }
     }
     Ok(())
@@ -1405,6 +1412,60 @@ async fn clash_set_mode(api_port: u16, mode: &str) -> Result<(), String> {
     }
 }
 
+/// Read the core's CURRENT clash routing mode via `GET /configs`. Used to verify that a
+/// `clash_set_mode` PATCH actually took effect (see `clash_set_mode_verified`).
+async fn clash_get_mode(api_port: u16) -> Result<String, String> {
+    let url = format!("http://127.0.0.1:{}/configs", api_port);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .no_proxy()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(&url)
+        .bearer_auth(crate::config::api_secret())
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("Clash API 返回 {}", resp.status()));
+    }
+    let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    body.get("mode")
+        .and_then(|m| m.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Clash /configs 响应缺少 mode 字段".to_string())
+}
+
+/// Set the clash routing mode and CONFIRM it stuck. A plain `clash_set_mode` is
+/// fire-and-forget: right after a core (re)start the control port can be up but not yet
+/// ready, and — because `cache_file` persists the last mode — the core boots into whatever
+/// was cached (often a stale "Direct" from an earlier session). If the lone PATCH is
+/// dropped in that window the core keeps the cached mode while app config / the UI show a
+/// different one, so e.g. "规则" silently routes every foreign site direct (GFW-blocked).
+///
+/// This PATCHes then reads back `GET /configs`, retrying a few times across the
+/// just-started window, and only returns `Ok` once the core reports the requested mode.
+async fn clash_set_mode_verified(api_port: u16, mode: &str) -> Result<(), String> {
+    let mut last_err = String::new();
+    for attempt in 0..6 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+        if let Err(e) = clash_set_mode(api_port, mode).await {
+            last_err = e;
+            continue;
+        }
+        match clash_get_mode(api_port).await {
+            // sing-box compares clash_mode case-insensitively; match that here.
+            Ok(current) if current.eq_ignore_ascii_case(mode) => return Ok(()),
+            Ok(current) => last_err = format!("下发 {mode} 后内核仍为 {current}"),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(format!("设置代理模式({mode})未生效: {last_err}"))
+}
+
 #[tauri::command]
 pub async fn cmd_set_proxy_mode(
     mode: String,
@@ -1428,6 +1489,10 @@ pub async fn cmd_set_proxy_mode(
 
     // Apply live so the switch is instant (no restart). rule/global/direct map to the
     // core's clash_mode; "tun" is a connection mode, not a routing mode, so skip it.
+    // Verify the switch actually landed and surface failure to the UI — a silently dropped
+    // PATCH used to leave the core in its cached mode while the UI showed the new one (e.g.
+    // "规则" but traffic still routed direct). The choice is already persisted above, so a
+    // later restart re-applies it regardless.
     if running {
         let clash_mode = match proxy_mode {
             ProxyMode::Global => Some("Global"),
@@ -1436,7 +1501,7 @@ pub async fn cmd_set_proxy_mode(
             ProxyMode::Tun => None,
         };
         if let Some(m) = clash_mode {
-            let _ = clash_set_mode(api_port, m).await;
+            clash_set_mode_verified(api_port, m).await?;
         }
     }
 

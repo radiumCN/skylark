@@ -269,16 +269,26 @@ export const useAppStore = defineStore("app", () => {
   // "TUN on / 0 B" state) and surface a clear message if it still can't recover.
   async function autoHealConnection(mode: "system" | "tun" | "off") {
     if (mode === "off") return;
+    // Backoff schedule (ms). Right after an in-app upgrade the installer force-kills the old
+    // core, and its WinTun adapter/routes can take a COUPLE OF MINUTES to become creatable
+    // again — observed in the field: a startup restore ~15s after launch failed every retry,
+    // but a manual toggle minutes later succeeded first try with no error. So a few fast
+    // retries aren't enough; we retry with growing backoff across a ~5-minute window, which
+    // automates exactly that "wait a bit, toggle TUN" recovery the user would otherwise do by
+    // hand. cmd_set_connection_mode returns Ok only once the core is actually up in the target
+    // mode (ensure_core waits for readiness), so a resolved invoke means we're genuinely healed
+    // — and if a manual/tray toggle recovered it first, the call short-circuits to Ok too.
+    const delays = [0, 2000, 4000, 8000, 15000, 30000, 30000, 45000, 45000, 60000, 60000];
     connecting.value = mode;
     let ok = false;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (const delay of delays) {
+      if (delay) await new Promise((r) => setTimeout(r, delay));
       try {
         await invoke("cmd_set_connection_mode", { mode });
         ok = true;
         break;
       } catch {
-        // Let Windows settle before the next attempt.
-        await new Promise((r) => setTimeout(r, 1500));
+        // Adapter still settling — keep trying on the next (longer) backoff.
       }
     }
     connecting.value = null;
@@ -290,7 +300,7 @@ export const useAppStore = defineStore("app", () => {
     updateTrayTooltip();
     error.value = ok
       ? null
-      : "开机恢复代理失败：TUN 未能自动拉起，请手动关闭再打开代理。";
+      : "开机自动恢复代理未成功，请手动点一下 TUN 开关重连。";
   }
 
   // ── Global hotkeys (N4) ─────────────────────────────────────────────

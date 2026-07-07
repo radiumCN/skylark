@@ -299,13 +299,17 @@ pub fn run() {
                             1
                         };
                         let mut applied = false;
+                        let mut last_err = String::new();
                         for attempt in 0..tun_attempts {
-                            if crate::commands::apply_connection_mode(&handle, state.inner(), mode)
-                                .await
-                                .is_ok()
-                            {
-                                applied = true;
-                                break;
+                            match crate::commands::apply_connection_mode(&handle, state.inner(), mode).await {
+                                Ok(()) => {
+                                    applied = true;
+                                    break;
+                                }
+                                // Keep the real reason (elevation / WinTun / control-port not
+                                // ready) so the update.log line below is actually diagnosable
+                                // instead of a bare "FAILED".
+                                Err(e) => last_err = e,
                             }
                             if attempt + 1 < tun_attempts {
                                 // Clear whatever half-created adapter the failed start left
@@ -316,8 +320,8 @@ pub fn run() {
                         }
                         if !applied {
                             crate::updater::update_log(&format!(
-                                "startup restore: mode={} FAILED after {} attempt(s), falling back to idle core",
-                                mode, tun_attempts
+                                "startup restore: mode={} FAILED after {} attempt(s): {} — falling back to idle core; frontend will retry",
+                                mode, tun_attempts, last_err
                             ));
                             let _ = crate::commands::start_idle_core(&handle, state.inner()).await;
                             // The startup task itself can't safely run the off→on heal here —

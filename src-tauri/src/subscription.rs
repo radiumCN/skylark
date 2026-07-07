@@ -2001,16 +2001,73 @@ fn build_tun_inbound(_config: &crate::types::AppConfig) -> Value {
     tun_in
 }
 
+/// Probe whether this machine has a working **IPv6 egress** to the public internet.
+///
+/// Why: in TUN + rule mode, CN apps whose domains resolve to real China IPv6 (e.g.
+/// WeChat → `240e::/…`) are routed to the `direct` outbound. On a host with no usable
+/// IPv6 route those direct dials fail instantly with "A socket operation was attempted
+/// to an unreachable network", and the app stalls — Happy Eyeballs waits on the dead v6
+/// path before falling back to IPv4. Detecting this lets us hand out IPv4-only DNS so the
+/// broken path is never offered in the first place.
+///
+/// How: a UDP `connect()` to a global-unicast target performs route + source-address
+/// selection **without sending any packet** (so it's instant and side-effect-free). We
+/// treat IPv6 as usable only when the OS picks a *global-unicast* source address
+/// (`2000::/3`). This deliberately rejects a link-local/ULA source — which is what gets
+/// selected when the only route is through our own TUN adapter (a ULA `fdxx::` address)
+/// rather than a real interface — so the probe isn't fooled into a false positive while
+/// our own TUN is up.
+pub fn host_has_ipv6() -> bool {
+    use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6, UdpSocket};
+    let sock = match UdpSocket::bind(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)) {
+        Ok(s) => s,
+        Err(_) => return false, // no usable IPv6 stack at all
+    };
+    // AliDNS (China) first — closest to the direct CN traffic we actually care about —
+    // then Cloudflare as a global fallback. No packet is sent; connect() only routes.
+    const TARGETS: [Ipv6Addr; 2] = [
+        Ipv6Addr::new(0x2400, 0x3200, 0, 0, 0, 0, 0, 1),
+        Ipv6Addr::new(0x2606, 0x4700, 0x4700, 0, 0, 0, 0, 0x1111),
+    ];
+    for target in TARGETS {
+        if sock.connect(SocketAddr::new(IpAddr::V6(target), 80)).is_ok() {
+            if let Ok(SocketAddr::V6(local)) = sock.local_addr() {
+                // Global unicast (2000::/3) ⇒ a real interface owns the v6 egress.
+                if local.ip().segments()[0] & 0xe000 == 0x2000 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Assemble the complete sing-box config: log + DNS + inbounds + outbounds + route +
 /// experimental(clash_api/cache). Orchestrates the `build_*` helpers above; the only
 /// pieces kept inline are the small rule-set definitions, the proxy-server hostname /
 /// CN-core domain lists they feed, and the final JSON assembly.
+///
+/// `host_ipv6` is the result of probing this machine for a working IPv6 egress (see
+/// [`host_has_ipv6`]). IPv6 features are enabled only when the user turned them on *and*
+/// the host can actually reach IPv6; otherwise a broken/absent local IPv6 path makes
+/// direct dials to CN IPv6 (e.g. WeChat's `240e::` servers) fail with "unreachable
+/// network" and stall those apps. Callers that don't need the probe (tests) pass `true`.
 pub fn build_singbox_config(
     outbounds: &[Value],
     config: &crate::types::AppConfig,
     active_tag: Option<&str>,
     nodes: &[ProxyNode],
+    host_ipv6: bool,
 ) -> Value {
+    // Effective IPv6: honour the user's toggle only if the host actually has IPv6 egress.
+    // When enabled-but-unreachable, fall back to the proven IPv4-only path (global
+    // dns.strategy = ipv4_only ⇒ no AAAA handed out ⇒ CN apps stay on the working IPv4).
+    let enable_ipv6 = config.enable_ipv6 && host_ipv6;
+    if config.enable_ipv6 && !host_ipv6 {
+        log::info!(
+            "本机无可用 IPv6 出口，本次自动改用 IPv4-only DNS（避免微信等国内站点走不通的 IPv6 直连而变慢）"
+        );
+    }
     let all_outbounds = build_proxy_outbounds(outbounds, config, active_tag, nodes);
 
     // sing-box ≥1.11 models WireGuard as a top-level `endpoints[]` entry rather than an
@@ -2061,7 +2118,7 @@ pub fn build_singbox_config(
     let user_rules = crate::rules::load_rules();
     let rule_providers = crate::rules::load_rule_providers();
 
-    let dns_rules = build_dns_rules(server_domains, &cn_core_domains, &user_rules, config.enable_ipv6);
+    let dns_rules = build_dns_rules(server_domains, &cn_core_domains, &user_rules, enable_ipv6);
     let (route_rules, provider_rule_sets) =
         build_route_rules(&cn_core_domains, &user_rules, &rule_providers);
     let inbounds = build_inbounds(config);
@@ -2079,10 +2136,10 @@ pub fn build_singbox_config(
                     "tag": "dns_fakeip",
                     "inet4_range": "198.18.0.0/15"
     });
-    if config.enable_ipv6 {
+    if enable_ipv6 {
         dns_fakeip["inet6_range"] = json!("fc00::/18");
     }
-    let dns_strategy = if config.enable_ipv6 { "prefer_ipv4" } else { "ipv4_only" };
+    let dns_strategy = if enable_ipv6 { "prefer_ipv4" } else { "ipv4_only" };
 
     let mut cfg = json!({
         "log": { "level": config.log_level, "timestamp": true },
@@ -2456,7 +2513,7 @@ mod tests {
             "security": "auto"
         });
         let cfg = crate::types::AppConfig::default();
-        let result = build_singbox_config(&[outbound], &cfg, None, &[]);
+        let result = build_singbox_config(&[outbound], &cfg, None, &[], true);
 
         // Top-level sections present and well-typed.
         assert!(result["dns"].is_object(), "dns section missing");
@@ -2505,7 +2562,7 @@ mod tests {
     #[test]
     fn build_config_dns_defaults_ipv4_only() {
         let cfg = crate::types::AppConfig::default();
-        let result = build_singbox_config(&[], &cfg, None, &[]);
+        let result = build_singbox_config(&[], &cfg, None, &[], true);
 
         assert_eq!(result["dns"]["strategy"], "ipv4_only");
         let local = dns_server(&result, "dns_local");
@@ -2519,7 +2576,7 @@ mod tests {
     fn build_config_ipv6_enables_dual_stack() {
         let mut cfg = crate::types::AppConfig::default();
         cfg.enable_ipv6 = true;
-        let result = build_singbox_config(&[], &cfg, None, &[]);
+        let result = build_singbox_config(&[], &cfg, None, &[], true);
 
         assert_eq!(result["dns"]["strategy"], "prefer_ipv4");
         assert!(
@@ -2529,10 +2586,26 @@ mod tests {
     }
 
     #[test]
+    fn build_config_ipv6_on_but_host_lacks_ipv6_falls_back_to_ipv4_only() {
+        // User enabled IPv6, but the host has no working IPv6 egress (host_ipv6 = false):
+        // we must NOT hand out AAAA, or CN apps (WeChat → 240e::) stall on the dead v6
+        // path. Effective config must match the IPv4-only path exactly.
+        let mut cfg = crate::types::AppConfig::default();
+        cfg.enable_ipv6 = true;
+        let result = build_singbox_config(&[], &cfg, None, &[], false);
+
+        assert_eq!(result["dns"]["strategy"], "ipv4_only");
+        assert!(
+            dns_server(&result, "dns_fakeip")["inet6_range"].is_null(),
+            "fakeip must not expose an inet6_range when the host has no IPv6 egress"
+        );
+    }
+
+    #[test]
     fn build_config_custom_doh_resolver() {
         let mut cfg = crate::types::AppConfig::default();
         cfg.dns_local = "https://1.1.1.1/dns-query".to_string();
-        let result = build_singbox_config(&[], &cfg, None, &[]);
+        let result = build_singbox_config(&[], &cfg, None, &[], true);
 
         let local = dns_server(&result, "dns_local");
         assert_eq!(local["type"], "https");
@@ -3010,6 +3083,7 @@ mtu: 1280
             &crate::types::AppConfig::default(),
             None,
             &[],
+            true,
         );
         // WireGuard object moved to top-level endpoints[]; not left among outbounds.
         let eps = cfg["endpoints"].as_array().expect("endpoints present");

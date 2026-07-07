@@ -128,6 +128,7 @@ async fn ensure_core_inner(
         &config,
         active_tag.as_deref(),
         &nodes,
+        subscription::host_has_ipv6(),
     );
     let config_path = config::singbox_config_path();
     config::ensure_dirs().map_err(|e| e.to_string())?;
@@ -1235,6 +1236,7 @@ async fn rebuild_and_restart_core(
         &config,
         active_tag.as_deref(),
         &nodes,
+        subscription::host_has_ipv6(),
     );
     let config_path = config::singbox_config_path();
     config::ensure_dirs().map_err(|e| e.to_string())?;

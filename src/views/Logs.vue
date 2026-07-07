@@ -68,11 +68,13 @@ async function exportLogs() {
   exporting.value = true;
   try {
     const path = await invoke<string>("cmd_export_logs");
-    try {
-      await revealItemInDir(path);
-    } catch {
+    // The file is already written at this point. Revealing it in the OS file
+    // manager (Explorer/Finder) spawns a native window, which can take a second
+    // or two — don't `await` it, or the export appears to hang for that whole
+    // time. Fire it in the background so the success feedback shows immediately.
+    revealItemInDir(path).catch(() => {
       // Reveal may be unavailable; the file is still written.
-    }
+    });
     alert(t("logs.exportSuccess", { path }));
   } catch (e) {
     alert(t("logs.exportFailed", { error: e }));

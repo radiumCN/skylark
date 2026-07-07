@@ -320,20 +320,72 @@ pub fn run() {
                         }
                         if !applied {
                             crate::updater::update_log(&format!(
-                                "startup restore: mode={} FAILED after {} attempt(s): {} — falling back to idle core; frontend will retry",
+                                "startup restore: mode={} not up after {} quick attempt(s): {} — starting idle core, continuing background retries",
                                 mode, tun_attempts, last_err
                             ));
+                            // Give the user a usable (if idle) app immediately instead of hanging
+                            // on TUN, then keep trying to bring the saved mode up in the BACKGROUND.
                             let _ = crate::commands::start_idle_core(&handle, state.inner()).await;
-                            // The startup task itself can't safely run the off→on heal here —
-                            // `send_ctrl_c` would broadcast CTRL_C to the console group and take
-                            // the GUI down with it (see the NOTE below). Hand the retry to the
-                            // frontend, which drives `cmd_set_connection_mode` from the command
-                            // thread — the one context where WinTun can be re-created safely. The
-                            // core is idle now, so the UI reconciles against a clean baseline
-                            // before retrying. If the listener isn't bound yet, the retries above
-                            // have already burned ~10-15s, so the frontend is up well in advance.
-                            use tauri::Emitter;
-                            let _ = handle.emit("startup-restore-failed", mode);
+
+                            // Why background retries: right after an in-app upgrade the installer
+                            // force-kills the old core, and its WinTun adapter/routes can take 1-2
+                            // MINUTES to become creatable again. The quick attempts above give up
+                            // long before that, which is why the tunnel showed "on, 0 B" until the
+                            // user toggled by hand. Retrying on a dense cadence until the adapter
+                            // frees up automates exactly that manual recovery.
+                            //
+                            // Safe from a background task: graceful teardown sends CTRL+BREAK
+                            // *targeted at the core's own process group*, and this GUI installs a
+                            // console handler that ignores Ctrl+C/Break (see singbox.rs), so no
+                            // console signal can self-kill the GUI regardless of caller context.
+                            //
+                            // Spawned separately so the restore block returns now and the tray
+                            // reconciles against the idle baseline; on success we emit
+                            // `connection-mode-changed` so the UI flips to the real TUN state.
+                            if mode == "tun" {
+                                let handle_heal = handle.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    let state = handle_heal.state::<AppState>();
+                                    let deadline = std::time::Instant::now()
+                                        + std::time::Duration::from_secs(300);
+                                    let mut healed = false;
+                                    while std::time::Instant::now() < deadline {
+                                        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                                        // Bail out if the user turned the proxy off meanwhile
+                                        // (apply_connection_mode("off") clears last_proxy_running),
+                                        // so we don't fight a manual choice.
+                                        let still_wanted = state
+                                            .app_config
+                                            .lock()
+                                            .unwrap_or_else(|e| e.into_inner())
+                                            .last_proxy_running;
+                                        if !still_wanted {
+                                            break;
+                                        }
+                                        if crate::commands::apply_connection_mode(
+                                            &handle_heal,
+                                            state.inner(),
+                                            "tun",
+                                        )
+                                        .await
+                                        .is_ok()
+                                        {
+                                            healed = true;
+                                            crate::updater::update_log(
+                                                "startup restore: TUN recovered by background retry",
+                                            );
+                                            use tauri::Emitter;
+                                            let _ = handle_heal.emit("connection-mode-changed", ());
+                                            break;
+                                        }
+                                    }
+                                    if !healed {
+                                        crate::updater::update_log(
+                                            "startup restore: TUN background retry exhausted (~5min); awaiting manual toggle",
+                                        );
+                                    }
+                                });
+                            }
                         }
                         // NOTE: we deliberately do NOT auto-run an off→on "heal" here. A freshly
                         // restored TUN can black-hole (TUN shows "on", 0 B) when stale routes were

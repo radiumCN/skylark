@@ -259,6 +259,40 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  // Auto-heal for a failed startup restore. When the backend's launch-time restore can't
+  // bring the saved mode up (typically TUN right after an in-app upgrade: the installer
+  // force-kills the old core and WinTun needs a few seconds to become creatable again), it
+  // falls back to an idle core and emits `startup-restore-failed`. The backend can't retry
+  // the off→on itself without killing the GUI, but WE can: this runs on the command thread,
+  // so re-invoking cmd_set_connection_mode is the safe path. Retry a few times, spaced out to
+  // ride out the settling adapter, then reconcile the UI (so it stops showing a misleading
+  // "TUN on / 0 B" state) and surface a clear message if it still can't recover.
+  async function autoHealConnection(mode: "system" | "tun" | "off") {
+    if (mode === "off") return;
+    connecting.value = mode;
+    let ok = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await invoke("cmd_set_connection_mode", { mode });
+        ok = true;
+        break;
+      } catch {
+        // Let Windows settle before the next attempt.
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    }
+    connecting.value = null;
+    // Reconcile reactive state with whatever actually happened.
+    await fetchConfig();
+    await fetchStatus();
+    await refreshSystemProxy();
+    syncTrayMenu(systemProxyEnabled.value, config.value.tun_enabled);
+    updateTrayTooltip();
+    error.value = ok
+      ? null
+      : "开机恢复代理失败：TUN 未能自动拉起，请手动关闭再打开代理。";
+  }
+
   // ── Global hotkeys (N4) ─────────────────────────────────────────────
   // Fixed, sensible defaults. Registration/handling happens entirely in JS via the
   // global-shortcut plugin; the Rust side only initialises the plugin. Disabled by
@@ -742,6 +776,13 @@ export const useAppStore = defineStore("app", () => {
       await fetchConfig();
       await refreshSystemProxy();
       updateTrayTooltip();
+    });
+    // Startup restore fell back to an idle core (e.g. WinTun wasn't ready yet right after
+    // an upgrade). We're on the command thread, so it's safe to redo off→on — retry
+    // bringing the saved mode up so the user doesn't have to toggle TUN by hand.
+    await listen<string>("startup-restore-failed", async (event) => {
+      const mode = (event.payload as "system" | "tun" | "off") || "tun";
+      await autoHealConnection(mode);
     });
   }
 

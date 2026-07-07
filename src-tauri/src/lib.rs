@@ -320,6 +320,16 @@ pub fn run() {
                                 mode, tun_attempts
                             ));
                             let _ = crate::commands::start_idle_core(&handle, state.inner()).await;
+                            // The startup task itself can't safely run the off→on heal here —
+                            // `send_ctrl_c` would broadcast CTRL_C to the console group and take
+                            // the GUI down with it (see the NOTE below). Hand the retry to the
+                            // frontend, which drives `cmd_set_connection_mode` from the command
+                            // thread — the one context where WinTun can be re-created safely. The
+                            // core is idle now, so the UI reconciles against a clean baseline
+                            // before retrying. If the listener isn't bound yet, the retries above
+                            // have already burned ~10-15s, so the frontend is up well in advance.
+                            use tauri::Emitter;
+                            let _ = handle.emit("startup-restore-failed", mode);
                         }
                         // NOTE: we deliberately do NOT auto-run an off→on "heal" here. A freshly
                         // restored TUN can black-hole (TUN shows "on", 0 B) when stale routes were

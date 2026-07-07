@@ -251,7 +251,14 @@ pub fn run() {
                         };
                         let _ = crate::config::save_app_config(&cfg_clone);
                     }
-                    let has_nodes = cfg.selected_subscription.is_some() && !cfg.active_nodes.is_empty();
+                    // "Do we have something to connect to?" — an active node has been chosen.
+                    // NOTE: this used to also require `cfg.selected_subscription.is_some()`, but
+                    // that field is never written anywhere (backend or frontend), so it was always
+                    // None → `has_nodes` was always false → restore was ALWAYS skipped. That silently
+                    // disabled the entire restore-on-startup feature (see update.log "skipped"
+                    // lines). `active_nodes` IS populated whenever a node/auto-select is chosen
+                    // (commands::cmd_set_active_node / cmd_set_active_group), so gate on that alone.
+                    let has_nodes = !cfg.active_nodes.is_empty();
                     let restore = cfg.restore_proxy_on_startup && cfg.last_proxy_running && has_nodes;
                     if restore {
                         let mode = if cfg.last_system_proxy {
@@ -404,8 +411,8 @@ pub fn run() {
                         // after updating" can be told apart from a genuine restore failure.
                         if just_upgraded {
                             crate::updater::update_log(&format!(
-                                "startup restore (post-upgrade): skipped (restore_on_startup={}, last_proxy_running={})",
-                                cfg.restore_proxy_on_startup, cfg.last_proxy_running
+                                "startup restore (post-upgrade): skipped (restore_on_startup={}, last_proxy_running={}, has_nodes={})",
+                                cfg.restore_proxy_on_startup, cfg.last_proxy_running, has_nodes
                             ));
                         }
                         let _ = crate::commands::start_idle_core(&handle, state.inner()).await;

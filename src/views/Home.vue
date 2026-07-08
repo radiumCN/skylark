@@ -94,8 +94,8 @@ const chartData = computed(() => ({
     {
       label: t("home.upload"),
       data: store.trafficHistory.map((p) => p.upload / 1024),
-      borderColor: "#4f6ef7",
-      backgroundColor: "rgba(79, 110, 247,0.08)",
+      borderColor: "#5e6ad2",
+      backgroundColor: "rgba(94, 106, 210,0.08)",
       borderWidth: 1.5,
       fill: true,
       tension: 0.4,
@@ -104,8 +104,8 @@ const chartData = computed(() => ({
     {
       label: t("home.download"),
       data: store.trafficHistory.map((p) => p.download / 1024),
-      borderColor: "#107c10",
-      backgroundColor: "rgba(16,124,16,0.08)",
+      borderColor: "#0e8f5a",
+      backgroundColor: "rgba(14, 143, 90,0.08)",
       borderWidth: 1.5,
       fill: true,
       tension: 0.4,
@@ -411,11 +411,13 @@ onUnmounted(() => {
   gap: 16px;
   position: relative;
   overflow: hidden;
-  transition: border-color 0.25s ease;
+  box-shadow: var(--shadow-md), var(--edge-highlight);
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
 }
 .hero-card.active {
-  border-color: rgba(16, 124, 16, 0.28);
+  border-color: var(--color-success-glow);
   background: var(--color-surface);
+  box-shadow: var(--shadow-md), var(--edge-highlight), 0 0 0 1px var(--color-success-glow);
 }
 .hero-icon {
   width: 52px; height: 52px;
@@ -429,7 +431,7 @@ onUnmounted(() => {
 .hero-icon.on {
   background: var(--color-success);
   color: white;
-  box-shadow: 0 4px 14px rgba(16, 124, 16, 0.35);
+  box-shadow: 0 4px 14px var(--color-success-glow);
   animation: hero-pop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 /* Soft breathing ring while connected */
@@ -438,7 +440,7 @@ onUnmounted(() => {
   position: absolute;
   inset: -6px;
   border-radius: inherit;
-  border: 2px solid rgba(16, 124, 16, 0.35);
+  border: 2px solid var(--color-success-glow);
   animation: hero-ring 2.6s ease-out infinite;
 }
 @keyframes hero-pop {
@@ -468,7 +470,11 @@ onUnmounted(() => {
   grid-template-columns: repeat(2, 1fr);
   gap: 12px;
 }
-.stat-card { padding: 16px; display: flex; align-items: flex-start; gap: 12px; }
+.stat-card {
+  padding: 16px; display: flex; align-items: flex-start; gap: 12px;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.stat-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md), var(--edge-highlight); }
 .stat-icon {
   width: 40px; height: 40px; border-radius: var(--radius-lg);
   display: flex; align-items: center; justify-content: center;
@@ -500,14 +506,16 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
+.traffic-stat:hover { transform: translateY(-1px); box-shadow: var(--shadow-md), var(--edge-highlight); }
 .traffic-stat.upload { color: var(--color-primary); }
 .traffic-stat.download { color: var(--color-success); }
 .traffic-label { font-size: 12px; color: var(--color-text-secondary); }
 .traffic-value { font-size: 16px; font-weight: 700; margin-left: auto; }
 .traffic-total { font-size: 11px; color: var(--color-text-muted); width: 100%; text-align: right; }
 
-.chart-card { padding: 16px; }
+.chart-card { padding: 16px; box-shadow: var(--shadow-md), var(--edge-highlight); }
 .chart-header {
   display: flex;
   align-items: center;
@@ -532,7 +540,7 @@ onUnmounted(() => {
 .net-settings-card { padding: 14px 16px; }
 .net-settings-title {
   display: flex; align-items: center; gap: 6px;
-  font-size: 12px; font-weight: 600; color: var(--color-text-secondary);
+  font-size: 11px; font-weight: 600; color: var(--color-text-secondary);
   text-transform: uppercase; letter-spacing: 0.5px;
   margin-bottom: 10px;
 }
@@ -555,11 +563,12 @@ onUnmounted(() => {
 .toggle-btn {
   width: 42px; height: 24px; border-radius: 100px;
   background: var(--color-border); border: none; cursor: pointer;
-  position: relative; transition: background 0.2s; flex-shrink: 0;
+  position: relative; transition: background 0.2s, box-shadow 0.2s; flex-shrink: 0;
   padding: 0;
 }
 .toggle-btn.on {
   background: var(--color-primary);
+  box-shadow: 0 0 0 1px transparent, 0 2px 8px var(--color-primary-glow);
 }
 .toggle-btn:focus-visible {
   outline: 2px solid var(--color-primary);
@@ -584,19 +593,22 @@ onUnmounted(() => {
 /* Mode pills */
 .mode-pills { display: flex; gap: 4px; }
 .mode-pill {
-  padding: 3px 10px; border-radius: var(--radius-sm);
+  padding: 3px 10px; border-radius: var(--radius-md);
   border: 1px solid var(--color-border);
   background: transparent; color: var(--color-text-secondary);
   font-size: 11px; cursor: pointer; transition: all 0.15s;
 }
 .mode-pill:hover { background: var(--color-neutral); }
-.mode-pill.active { background: var(--color-primary); color: white; border-color: transparent; }
+.mode-pill.active {
+  background: var(--color-primary); color: white; border-color: transparent;
+  box-shadow: 0 2px 8px var(--color-primary-glow);
+}
 
 .error-banner {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px;
-  background: rgba(209,52,56,0.08);
-  border: 1px solid rgba(209,52,56,0.2);
+  background: var(--color-error-soft);
+  border: 1px solid var(--color-error-soft);
   border-radius: var(--radius-md);
   color: var(--color-error);
   font-size: 13px;

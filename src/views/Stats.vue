@@ -57,8 +57,8 @@ const chartData = computed(() => ({
     {
       label: t("stats.download"),
       data: shown.value.map((d) => d.download),
-      borderColor: "rgba(16, 124, 16, 1)",
-      backgroundColor: "rgba(16, 124, 16, 0.12)",
+      borderColor: "#0e8f5a",
+      backgroundColor: "rgba(14, 143, 90, 0.10)",
       borderWidth: 2,
       tension: 0.35,
       fill: true,
@@ -68,8 +68,8 @@ const chartData = computed(() => ({
     {
       label: t("stats.upload"),
       data: shown.value.map((d) => d.upload),
-      borderColor: "rgba(79, 110, 247, 1)",
-      backgroundColor: "rgba(79, 110, 247, 0.12)",
+      borderColor: "#5e6ad2",
+      backgroundColor: "rgba(94, 106, 210, 0.10)",
       borderWidth: 2,
       tension: 0.35,
       fill: true,
@@ -84,7 +84,7 @@ const chartOptions = computed(() => ({
   maintainAspectRatio: false,
   interaction: { mode: "index" as const, intersect: false },
   plugins: {
-    legend: { position: "top" as const, labels: { boxWidth: 12, font: { size: 11 } } },
+    legend: { position: "top" as const, labels: { color: "rgba(128,128,128,0.85)", boxWidth: 12, font: { size: 11 } } },
     tooltip: {
       callbacks: {
         label: (ctx: TooltipItem<"line">) =>
@@ -93,10 +93,15 @@ const chartOptions = computed(() => ({
     },
   },
   scales: {
-    x: { grid: { display: false }, ticks: { font: { size: 10 }, maxRotation: 0, autoSkip: true } },
+    x: {
+      grid: { display: false },
+      ticks: { color: "rgba(128,128,128,0.65)", font: { size: 10 }, maxRotation: 0, autoSkip: true },
+    },
     y: {
       beginAtZero: true,
+      grid: { color: "rgba(128,128,128,0.10)" },
       ticks: {
+        color: "rgba(128,128,128,0.65)",
         font: { size: 10 },
         callback: (v: number | string) => formatBytes(Number(v)),
       },
@@ -187,30 +192,91 @@ onMounted(load);
 </template>
 
 <style scoped>
-.range-tabs { display: flex; gap: 2px; background: var(--color-bg-secondary); border-radius: 8px; padding: 2px; }
+.range-tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--color-neutral);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 2px;
+}
 .range-tab {
-  border: none; background: transparent; cursor: pointer; font-size: 12px;
-  padding: 4px 10px; border-radius: 6px; color: var(--color-text-secondary);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  padding: var(--space-1) 10px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  transition: color 150ms ease-out, background 150ms ease-out;
 }
-.range-tab.active { background: var(--color-bg); color: var(--color-text); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+.range-tab:hover { color: var(--color-text); }
+.range-tab.active {
+  background: var(--color-surface-strong);
+  color: var(--color-text);
+  box-shadow: var(--shadow-sm), var(--edge-highlight);
+}
 
-.summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
-.summary-card { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.summary-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  transition: transform 150ms ease-out, box-shadow 150ms ease-out;
+}
+.summary-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md), var(--edge-highlight);
+}
 .summary-icon {
-  width: 36px; height: 36px; border-radius: 9px; display: flex; align-items: center;
-  justify-content: center; color: #fff; flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
-.summary-icon.today { background: var(--accent-violet); }
-.summary-icon.down { background: var(--color-success); }
-.summary-icon.up { background: var(--color-primary); }
-.summary-icon.total { background: #6b6b6b; }
-.summary-label { font-size: 11.5px; color: var(--color-text-secondary); margin-bottom: 2px; }
-.summary-value { font-size: 16px; font-weight: 600; }
+.summary-icon.today { background: var(--color-primary-soft); color: var(--accent-violet); }
+.summary-icon.down { background: var(--color-success-soft); color: var(--color-success); }
+.summary-icon.up { background: var(--color-primary-soft); color: var(--color-primary); }
+.summary-icon.total { background: var(--color-neutral-strong); color: var(--color-text-secondary); }
+.summary-label {
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text-secondary);
+  margin-bottom: 2px;
+}
+.summary-value {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
 
-.chart-card { padding: 16px; }
-.chart-title { font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+.chart-card { padding: var(--space-4); box-shadow: var(--shadow-md), var(--edge-highlight); }
+.chart-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: var(--space-3);
+}
 .chart-wrap { height: 320px; }
-.empty-hint { color: var(--color-text-secondary); font-size: 12.5px; padding: 40px 0; text-align: center; line-height: 1.6; }
+.empty-hint {
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  padding: 40px 0;
+  text-align: center;
+  line-height: 1.6;
+}
 
 @media (max-width: 720px) {
   .summary-grid { grid-template-columns: repeat(2, 1fr); }

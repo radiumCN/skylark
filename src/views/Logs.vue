@@ -129,7 +129,7 @@ onUnmounted(() => {
           <Download :size="14" />
           {{ exporting ? t('logs.exporting') : t('logs.export') }}
         </button>
-        <button class="btn btn-ghost" @click="logs = []" :title="t('logs.clear')">
+        <button class="btn btn-ghost clear-btn" @click="logs = []" :title="t('logs.clear')">
           <Trash2 :size="14" />
         </button>
       </div>
@@ -157,34 +157,70 @@ onUnmounted(() => {
 .page-title { font-size: 20px; font-weight: 600; }
 .header-actions { display: flex; align-items: center; gap: 8px; }
 
-.level-tabs { display: flex; gap: 4px; }
-.level-tab {
-  padding: 3px 10px; border-radius: var(--radius-sm);
+.level-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--color-neutral-soft);
   border: 1px solid var(--color-border);
-  background: transparent; color: var(--color-text-secondary);
-  font-size: 11px; font-weight: 500; cursor: pointer; transition: all 0.15s;
 }
-.level-tab:hover { background: var(--color-neutral); }
-.level-tab.active { background: var(--color-primary); color: white; border-color: transparent; }
+.level-tab {
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.level-tab:hover { color: var(--color-text); background: var(--color-neutral); }
+.level-tab.active {
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
+  border-color: transparent;
+  box-shadow: var(--edge-highlight);
+}
+
+/* Destructive clear: neutral ghost by default, red-tinted on hover */
+.clear-btn:hover {
+  background: var(--color-error-soft);
+  color: var(--color-error);
+}
 
 .log-container {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 16px;
-  background: #1a1a1a;
+  padding: var(--space-3) var(--space-4);
+  /* Deeper inset so the scrolling body reads as a console inside the glass shell */
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm), var(--edge-highlight);
   font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.5;
 }
+.log-container::-webkit-scrollbar { width: 10px; }
+.log-container::-webkit-scrollbar-thumb {
+  background: var(--color-neutral-strong);
+  border-radius: var(--radius-sm);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.log-container::-webkit-scrollbar-thumb:hover { background: var(--color-neutral); background-clip: padding-box; }
 .log-line {
-  padding: 1px 0;
+  padding: 1px var(--space-1);
+  border-radius: var(--radius-sm);
   white-space: pre-wrap;
   word-break: break-all;
+  transition: background 0.12s;
 }
 .log-line:hover { background: rgba(255,255,255,0.04); }
 .log-empty {
-  color: var(--color-text-secondary);
+  color: var(--color-text-muted);
   text-align: center;
   padding: 48px;
   font-family: 'Segoe UI', sans-serif;

@@ -48,12 +48,29 @@ onMounted(async () => {
   display: flex;
   height: 100vh;
   overflow: hidden;
+  position: relative;
+  background: var(--color-bg);
+}
+/* Ambient "aurora" wash — soft indigo/violet/teal blobs bleeding from the corners.
+   Fixed to the shell (behind the glass sidebar + content) so panels read as frosted
+   glass floating over depth. Subtle in light mode, luminous in dark. */
+.app-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(60% 55% at 12% 0%, var(--aurora-1), transparent 70%),
+    radial-gradient(50% 50% at 100% 25%, var(--aurora-2), transparent 68%),
+    radial-gradient(55% 55% at 85% 100%, var(--aurora-3), transparent 72%);
 }
 .app-content {
+  position: relative;
+  z-index: 1;
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 24px;
-  background: var(--color-bg);
 }
 </style>

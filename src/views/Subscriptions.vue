@@ -625,16 +625,19 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 
 .mode-tabs {
   display: flex; gap: 4px; padding: 3px;
-  background: rgba(128,128,128,0.08); border-radius: var(--radius-md);
+  background: var(--color-neutral); border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
 }
 .mode-tab {
   flex: 1; padding: 6px 12px; border: none; border-radius: var(--radius-sm);
   background: transparent; color: var(--color-text-secondary);
-  font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s;
+  font-size: 12px; font-weight: 500; cursor: pointer;
+  transition: background 0.15s ease-out, color 0.15s ease-out;
 }
+.mode-tab:hover { color: var(--color-text); }
 .mode-tab.active {
-  background: var(--color-surface); color: var(--color-text);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+  background: var(--color-surface-strong); color: var(--color-text);
+  box-shadow: var(--shadow-sm), var(--edge-highlight);
 }
 .form-error {
   display: flex; align-items: center; gap: 6px;
@@ -646,9 +649,15 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 .sub-item {
   padding: 0;
   display: flex; flex-direction: column;
-  transition: box-shadow 0.15s; overflow: hidden;
+  border-radius: var(--radius-lg);
+  transition: box-shadow 0.15s ease-out, border-color 0.15s ease-out, transform 0.15s ease-out;
+  overflow: hidden;
 }
-.sub-item:hover { box-shadow: var(--shadow-md); }
+.sub-item:hover {
+  box-shadow: var(--shadow-md), var(--edge-highlight);
+  border-color: var(--color-primary-soft);
+  transform: translateY(-1px);
+}
 .sub-main {
   display: flex; align-items: flex-start; justify-content: space-between;
   gap: 12px; padding: 16px 18px;
@@ -662,15 +671,15 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 }
 .meta-item.auto-hit {
   color: var(--accent-amber); font-weight: 500;
-  background: rgba(193, 128, 30,0.12); padding: 1px 7px; border-radius: 10px;
+  background: var(--color-warning-soft); padding: 1px 7px; border-radius: 100px;
 }
 .sub-url {
   font-size: 11px; color: var(--color-text-muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 500px;
 }
 .sub-actions { display: flex; gap: 4px; flex-shrink: 0; }
-.icon-btn { padding: 6px !important; }
-.icon-btn.danger:hover { color: var(--color-error); }
+.icon-btn { padding: 6px !important; transition: color 0.15s ease-out, background 0.15s ease-out; }
+.icon-btn.danger:hover { color: var(--color-error); background: var(--color-error-soft); }
 
 /* Airport usage / quota */
 .sub-quota {
@@ -685,20 +694,20 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 .quota-text { font-weight: 500; }
 .quota-expire {
   font-size: 11px; color: var(--color-text-muted);
-  background: var(--color-neutral); padding: 1px 7px; border-radius: 10px;
+  background: var(--color-neutral); padding: 1px 7px; border-radius: 100px;
 }
 .quota-expire.expired { color: var(--color-error); background: var(--color-error-soft); font-weight: 600; }
 .quota-bar {
-  height: 5px; border-radius: 3px; overflow: hidden;
-  background: rgba(128,128,128,0.18);
+  height: 5px; border-radius: 100px; overflow: hidden;
+  background: var(--color-neutral-strong);
 }
-.quota-fill { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
+.quota-fill { height: 100%; border-radius: 100px; transition: width 0.3s ease-out; }
 
 /* Auto-update row */
 .sub-autoupdate {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 18px;
-  background: rgba(128,128,128,0.04);
+  background: var(--color-neutral-soft);
   border-top: 1px solid var(--color-border);
 }
 .autoupdate-left {
@@ -708,22 +717,26 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 .autoupdate-icon { color: var(--color-text-muted); flex-shrink: 0; }
 .autoupdate-label { font-weight: 500; }
 .autoupdate-next {
-  font-size: 11px; color: var(--color-text-muted);
-  background: var(--color-neutral); padding: 1px 7px; border-radius: 10px;
+  font-size: 11px; color: var(--color-primary);
+  background: var(--color-primary-soft); padding: 1px 7px; border-radius: 100px;
 }
 .autoupdate-right { display: flex; align-items: center; gap: 8px; }
 
 .interval-select {
   font-size: 12px; padding: 2px 6px; border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border); background: var(--color-surface);
+  border: 1px solid var(--color-border); background: var(--color-surface-strong);
   color: var(--color-text); cursor: pointer; outline: none;
+  transition: border-color 0.15s ease-out, box-shadow 0.15s ease-out;
 }
-.interval-select:focus { border-color: var(--color-primary); }
+.interval-select:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
+}
 
 .mini-toggle {
-  width: 34px; height: 20px; border-radius: 10px;
-  background: rgba(128,128,128,0.3); border: none; cursor: pointer;
-  position: relative; transition: background 0.2s; padding: 0; flex-shrink: 0;
+  width: 34px; height: 20px; border-radius: 100px;
+  background: var(--color-neutral-strong); border: none; cursor: pointer;
+  position: relative; transition: background 0.2s ease-out; padding: 0; flex-shrink: 0;
 }
 .mini-toggle.on { background: var(--color-primary); }
 .mini-knob {
@@ -735,21 +748,22 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 .mini-toggle.on .mini-knob { transform: translateX(14px); }
 
 .hint-card { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
-.hint-title { font-size: 12px; font-weight: 600; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+.hint-title { font-size: 11px; font-weight: 600; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
 .hint-list { display: flex; flex-direction: column; gap: 8px; }
 .hint-item { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--color-text-secondary); }
 
 /* ─── QR Code dialog ─── */
 .qr-overlay {
   position: fixed; inset: 0; z-index: 1000;
-  background: rgba(0,0,0,0.45);
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center;
 }
 .qr-dialog {
-  background: var(--color-surface);
+  background: var(--color-surface-strong);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg), var(--edge-highlight);
   width: 320px;
   overflow: hidden;
 }
@@ -770,17 +784,17 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
   display: flex; align-items: center;
   transition: color 0.15s, background 0.15s;
 }
-.qr-close:hover { color: var(--color-text); background: rgba(128,128,128,0.12); }
+.qr-close:hover { color: var(--color-text); background: var(--color-neutral); }
 
 .qr-body {
   padding: 20px 24px 20px;
   display: flex; flex-direction: column; align-items: center; gap: 14px;
 }
 .qr-image-wrap {
-  background: #fff;
+  background: white;
   border-radius: var(--radius-md);
   padding: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  box-shadow: var(--shadow-md);
 }
 .qr-image { display: block; width: 200px; height: 200px; }
 .qr-placeholder {
@@ -793,7 +807,7 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 }
 .qr-url-row {
   display: flex; align-items: center; gap: 6px; width: 100%;
-  background: rgba(128,128,128,0.06); border: 1px solid var(--color-border);
+  background: var(--color-neutral-soft); border: 1px solid var(--color-border);
   border-radius: var(--radius-md); padding: 6px 8px 6px 10px;
 }
 .qr-url-text {
@@ -806,7 +820,7 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 .copy-ok { color: var(--color-success); }
 
 /* QR dialog enter/leave transition */
-.qr-fade-enter-active, .qr-fade-leave-active { transition: opacity 0.18s, transform 0.18s; }
+.qr-fade-enter-active, .qr-fade-leave-active { transition: opacity 0.22s ease-out, transform 0.22s ease-out; }
 .qr-fade-enter-from, .qr-fade-leave-to { opacity: 0; transform: scale(0.95); }
 
 /* Node filter UI */

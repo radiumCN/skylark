@@ -96,14 +96,17 @@ onMounted(() => {
 
 <style scoped>
 .sidebar {
+  position: relative;
+  z-index: 1;
   width: var(--sidebar-width);
   height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--color-surface);
   border-right: 1px solid var(--color-border);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: var(--edge-highlight);
   flex-shrink: 0;
   padding: 8px 8px 12px;
 }
@@ -111,7 +114,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px 12px;
+  padding: 10px 10px 14px;
   margin-bottom: 4px;
 }
 .brand-mark {
@@ -119,6 +122,7 @@ onMounted(() => {
   border-radius: var(--radius-md);
   object-fit: cover;
   flex-shrink: 0;
+  box-shadow: 0 2px 10px var(--color-primary-glow);
 }
 .brand-text { display: flex; align-items: center; }
 .brand-name { font-size: 15px; font-weight: 700; color: var(--color-text); letter-spacing: 0.2px; }
@@ -129,6 +133,7 @@ onMounted(() => {
   gap: 2px;
 }
 .nav-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -142,7 +147,7 @@ onMounted(() => {
   cursor: pointer;
   text-align: left;
   width: 100%;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 .nav-item:hover {
   background: var(--color-neutral);
@@ -151,6 +156,20 @@ onMounted(() => {
 .nav-item.active {
   background: var(--color-primary-soft);
   color: var(--color-primary);
+  font-weight: 600;
+}
+/* Left accent rail on the active item — the signature "you are here" indicator. */
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: 0 3px 3px 0;
+  background: var(--color-primary);
+  box-shadow: 0 0 8px var(--color-primary-glow);
 }
 .sidebar-footer {
   display: flex;

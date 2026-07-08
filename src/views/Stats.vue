@@ -20,6 +20,7 @@ import { formatBytes } from "../utils/format";
 import { useDelayedRefresh } from "../composables/useDelayedRefresh";
 import StatTile from "../components/StatTile.vue";
 import EmptyState from "../components/EmptyState.vue";
+import Skeleton from "../components/Skeleton.vue";
 
 const { t } = useI18n();
 
@@ -52,6 +53,10 @@ const todayEntry = computed(() => {
   if (history.value.length === 0) return null;
   return history.value[history.value.length - 1];
 });
+
+// Skeleton only on the very first fetch (no data yet). Later refreshes keep the
+// existing numbers visible and use the refresh button's spinner instead.
+const initialLoading = computed(() => loading.value && history.value.length === 0);
 
 const chartData = computed(() => ({
   labels: shown.value.map((d) => shortDate(d.date)),
@@ -146,8 +151,17 @@ onMounted(load);
       </div>
     </div>
 
-    <!-- Summary cards -->
-    <div class="summary-grid">
+    <!-- Summary cards (skeleton on first load) -->
+    <div v-if="initialLoading" class="summary-grid">
+      <div v-for="i in 4" :key="i" class="card skel-tile">
+        <Skeleton width="40px" height="40px" radius="var(--radius-lg)" />
+        <div class="skel-tile-body">
+          <Skeleton width="60%" height="10px" />
+          <Skeleton width="45%" height="18px" />
+        </div>
+      </div>
+    </div>
+    <div v-else class="summary-grid">
       <StatTile
         :icon="Database"
         :label="t('stats.today')"
@@ -177,7 +191,10 @@ onMounted(load);
     <!-- Chart -->
     <div class="card chart-card">
       <div class="chart-title">{{ t('stats.dailyTraffic') }}</div>
-      <div v-if="shown.length > 0" class="chart-wrap">
+      <div v-if="initialLoading" class="chart-wrap">
+        <Skeleton width="100%" height="100%" radius="var(--radius-md)" />
+      </div>
+      <div v-else-if="shown.length > 0" class="chart-wrap">
         <Line :data="chartData" :options="chartOptions" />
       </div>
       <EmptyState v-else :icon="Database" :title="t('stats.emptyHint')" />
@@ -190,6 +207,19 @@ onMounted(load);
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: var(--space-3);
+}
+.skel-tile {
+  padding: var(--space-4);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.skel-tile-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: 2px;
 }
 
 .chart-card { padding: var(--space-4); box-shadow: var(--shadow-md), var(--edge-highlight); }

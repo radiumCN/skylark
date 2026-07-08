@@ -5,6 +5,7 @@ import { useAppStore } from "../stores/app";
 import { useI18n } from "vue-i18n";
 import { useDelayedRefresh } from "../composables/useDelayedRefresh";
 import EmptyState from "../components/EmptyState.vue";
+import Skeleton from "../components/Skeleton.vue";
 
 const { t } = useI18n();
 const store = useAppStore();
@@ -367,9 +368,21 @@ const autoNowName = computed(() => store.activeNodeNow);
       <span>⚡ {{ t("nodes.speedNoticePrefix") }}<strong>{{ t("nodes.speedNoticeStrong") }}</strong></span>
     </div>
 
+    <!-- Cold-start skeleton (before the first data load resolves) -->
+    <div v-if="store.nodes.length === 0 && !store.initialized" class="node-skel-list">
+      <div v-for="i in 6" :key="i" class="card node-skel">
+        <Skeleton width="8px" height="8px" circle />
+        <div class="node-skel-body">
+          <Skeleton width="42%" height="13px" />
+          <Skeleton width="26%" height="10px" />
+        </div>
+        <Skeleton width="52px" height="20px" radius="100px" />
+      </div>
+    </div>
+
     <!-- Empty -->
     <EmptyState
-      v-if="store.nodes.length === 0"
+      v-else-if="store.nodes.length === 0"
       :icon="Signal"
       :title="t('nodes.emptyTitle')"
       :desc="t('nodes.emptyDesc')"
@@ -477,7 +490,10 @@ const autoNowName = computed(() => store.activeNodeNow);
 </template>
 
 <style scoped>
-/* Sticky glass toolbar: title/actions + filters pinned to the scroll top. */
+/* Sticky toolbar: title/actions + filters pinned to the scroll top. Full-bleed
+   over the shell's 24px padding so it reads as an edge-to-edge header band rather
+   than a flat rectangle floating over the ambient glow; opaque bg hides the list
+   scrolling underneath. */
 .toolbar {
   position: sticky;
   top: 0;
@@ -485,8 +501,8 @@ const autoNowName = computed(() => store.activeNodeNow);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-3) 0;
-  margin: calc(var(--space-3) * -1) 0 0;
+  margin: -24px -24px 0;
+  padding: 24px 24px var(--space-3);
   background: var(--color-bg);
   border-bottom: 1px solid var(--color-border);
 }
@@ -511,6 +527,14 @@ const autoNowName = computed(() => store.activeNodeNow);
 }
 
 .node-list { display: flex; flex-direction: column; gap: 6px; }
+.node-skel-list { display: flex; flex-direction: column; gap: 6px; }
+.node-skel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+}
+.node-skel-body { flex: 1; display: flex; flex-direction: column; gap: var(--space-2); }
 .node-item {
   padding: 12px 16px;
   display: flex; align-items: center; justify-content: space-between; gap: 12px;

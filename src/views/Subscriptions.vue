@@ -10,6 +10,7 @@ import { formatBytes } from "../utils/format";
 import { copyToClipboard, readFromClipboard } from "../utils/clipboard";
 import { useTemporaryFlag } from "../composables/useTemporaryFlag";
 import EmptyState from "../components/EmptyState.vue";
+import Skeleton from "../components/Skeleton.vue";
 import ToggleSwitch from "../components/ToggleSwitch.vue";
 
 const { t } = useI18n();
@@ -302,9 +303,23 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
       </div>
     </div>
 
+    <!-- Cold-start skeleton (before the first data load resolves) -->
+    <div
+      v-if="store.subscriptions.length === 0 && !showAddDialog && !store.initialized"
+      class="sub-skel-list"
+    >
+      <div v-for="i in 3" :key="i" class="card sub-skel">
+        <div class="sub-skel-main">
+          <Skeleton width="38%" height="14px" />
+          <Skeleton width="62%" height="10px" />
+        </div>
+        <Skeleton width="72px" height="24px" radius="var(--radius-md)" />
+      </div>
+    </div>
+
     <!-- Empty State -->
     <EmptyState
-      v-if="store.subscriptions.length === 0 && !showAddDialog"
+      v-else-if="store.subscriptions.length === 0 && !showAddDialog"
       :icon="Server"
       :title="t('subscriptions.empty')"
       :desc="t('subscriptions.emptyDesc')"
@@ -627,6 +642,14 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 
 .sub-list { display: flex; flex-direction: column; gap: 10px; }
+.sub-skel-list { display: flex; flex-direction: column; gap: 10px; }
+.sub-skel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+.sub-skel-main { flex: 1; display: flex; flex-direction: column; gap: var(--space-2); }
 .sub-item {
   padding: 0;
   display: flex; flex-direction: column;

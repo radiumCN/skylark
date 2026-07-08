@@ -71,6 +71,9 @@ onMounted(async () => {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 24px;
+  /* No TOP padding: it lives on .page instead, so sticky headers can pin flush
+     to the scroll top (a top padding here would leave a gap the content peeks
+     through). Sides + bottom stay here. */
+  padding: 0 24px 24px;
 }
 </style>

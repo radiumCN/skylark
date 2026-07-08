@@ -343,6 +343,10 @@ html[data-theme="dark"] .badge-green { color: #34d399; }
   flex-direction: column;
   gap: var(--space-4);
   max-width: var(--page-max);
+  /* Top breathing room lives here (not on the scroll container) so it scrolls
+     away and sticky page headers pin flush to the top. box-sizing:border-box
+     keeps .page--fill height:100% correct. */
+  padding-top: var(--space-6);
 }
 /* Full-width pages (data tables / console): opt out of the reading-width cap. */
 .page--wide { max-width: none; }

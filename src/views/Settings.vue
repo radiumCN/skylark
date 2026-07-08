@@ -1365,8 +1365,11 @@ onUnmounted(() => {
 .btn-sm { padding: 3px 10px; font-size: 12px; }
 .btn-sm.danger { color: var(--color-error); }
 
-/* Sticky section-jump nav — glass bar pinned to the app-content scroll region so
-   the sections scroll underneath it. Chips reuse the section i18n titles. */
+/* Sticky section-jump nav pinned to the app-content scroll region so sections
+   scroll underneath it. Full-bleed over the shell's 24px side padding so it reads
+   as a pinned header band (not a floating card), with an OPAQUE bg and no
+   backdrop blur — blurring the moving content underneath is what produced the
+   on-scroll ghosting / see-through artifact. */
 .section-nav {
   position: sticky;
   top: 0;
@@ -1374,11 +1377,9 @@ onUnmounted(() => {
   display: flex;
   gap: 6px;
   overflow-x: auto;
-  padding: 8px 4px;
-  margin: 0 -4px;
-  background: var(--color-surface);
-  backdrop-filter: blur(22px) saturate(180%);
-  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  margin: 0 -24px;
+  padding: 10px 24px;
+  background: var(--color-bg);
   border-bottom: 1px solid var(--color-border);
   scrollbar-width: none;
 }

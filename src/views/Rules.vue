@@ -10,6 +10,7 @@ import {
 } from "@lucide/vue";
 import EmptyState from "../components/EmptyState.vue";
 import ToggleSwitch from "../components/ToggleSwitch.vue";
+import Select from "../components/Select.vue";
 import { useFeedbackStore } from "../stores/feedback";
 
 const fb = useFeedbackStore();
@@ -393,11 +394,14 @@ onMounted(() => {
       </div>
       <div class="form-group">
         <label class="form-label">{{ t("rules.hitAction") }}</label>
-        <select class="input" v-model="newProviderAction">
-          <option value="proxy">{{ t("rules.actionProxy") }}</option>
-          <option value="direct">{{ t("rules.actionDirect") }}</option>
-          <option value="block">{{ t("rules.actionBlock") }}</option>
-        </select>
+        <Select
+          v-model="newProviderAction"
+          :options="[
+            { value: 'proxy', label: t('rules.actionProxy') },
+            { value: 'direct', label: t('rules.actionDirect') },
+            { value: 'block', label: t('rules.actionBlock') },
+          ]"
+        />
       </div>
       <div class="dialog-actions">
         <button class="btn btn-ghost" @click="showProviderDialog = false">{{ t("rules.cancel") }}</button>
@@ -522,12 +526,15 @@ onMounted(() => {
             </div>
             <div class="form-group half">
               <label class="form-label">{{ t("rules.action") }}</label>
-              <select class="input" v-model="newRule.action">
-                <option value="proxy">{{ t("rules.actionProxy") }}</option>
-                <option value="direct">{{ t("rules.actionDirect") }}</option>
-                <option value="block">{{ t("rules.actionBlock") }}</option>
-                <option value="dns">{{ t("rules.actionDnsHandle") }}</option>
-              </select>
+              <Select
+                v-model="newRule.action"
+                :options="[
+                  { value: 'proxy', label: t('rules.actionProxy') },
+                  { value: 'direct', label: t('rules.actionDirect') },
+                  { value: 'block', label: t('rules.actionBlock') },
+                  { value: 'dns', label: t('rules.actionDnsHandle') },
+                ]"
+              />
             </div>
           </div>
 
@@ -579,11 +586,15 @@ onMounted(() => {
           <div class="form-row">
             <div class="form-group half">
               <label class="form-label">{{ t("rules.networkProtocol") }}</label>
-              <select class="input" v-model="newRule.network">
-                <option :value="null">{{ t("rules.networkAny") }}</option>
-                <option value="tcp">TCP</option>
-                <option value="udp">UDP</option>
-              </select>
+              <Select
+                :model-value="newRule.network ?? ''"
+                :options="[
+                  { value: '', label: t('rules.networkAny') },
+                  { value: 'tcp', label: 'TCP' },
+                  { value: 'udp', label: 'UDP' },
+                ]"
+                @update:model-value="newRule.network = $event === '' ? null : String($event)"
+              />
             </div>
           </div>
         </div>

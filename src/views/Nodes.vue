@@ -7,8 +7,14 @@ import { useI18n } from "vue-i18n";
 import { useDelayedRefresh } from "../composables/useDelayedRefresh";
 import EmptyState from "../components/EmptyState.vue";
 import Skeleton from "../components/Skeleton.vue";
+import Select from "../components/Select.vue";
 
 const { t } = useI18n();
+
+const groupTypeOptions = computed(() => [
+  { value: "urltest", label: t("nodes.autoSelectByLatency") },
+  { value: "selector", label: t("nodes.manualSelect") },
+]);
 const store = useAppStore();
 const fb = useFeedbackStore();
 const { refreshing, refresh } = useDelayedRefresh();
@@ -331,10 +337,7 @@ const autoNowName = computed(() => store.activeNodeNow);
       <div v-if="showGroupEditor" class="group-editor">
         <div class="editor-row">
           <input class="input" v-model="groupForm.name" :placeholder="t('nodes.groupNamePlaceholder')" />
-          <select class="input editor-type" v-model="groupForm.group_type">
-            <option value="urltest">{{ t("nodes.autoSelectByLatency") }}</option>
-            <option value="selector">{{ t("nodes.manualSelect") }}</option>
-          </select>
+          <Select class="editor-type" v-model="groupForm.group_type" :options="groupTypeOptions" />
         </div>
         <div class="member-label">{{ t("nodes.selectMembers", { n: groupForm.nodes.length }) }}</div>
         <div class="member-grid">

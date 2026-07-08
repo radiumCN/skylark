@@ -298,6 +298,66 @@ textarea,
   box-shadow: 0 0 0 3px var(--color-primary-soft);
 }
 
+/* Custom checkbox — replaces the OS-native checkbox square with an Aurora box +
+   check. (The visually-hidden toggle checkboxes keep width/height:0 via their own
+   scoped rules, so this doesn't affect the switch controls.) */
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  vertical-align: middle;
+  border: 1.5px solid var(--color-neutral-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-strong);
+  cursor: pointer;
+  position: relative;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+input[type="checkbox"]:hover { border-color: var(--color-primary); }
+input[type="checkbox"]:checked {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 4.5px;
+  top: 1.5px;
+  width: 4px;
+  height: 8px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+/* Native <details> disclosure: hide the OS triangle marker and draw our own
+   chevron that rotates open — otherwise summaries show a platform ▶ glyph. */
+summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+summary::-webkit-details-marker { display: none; }
+summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+  opacity: 0.7;
+}
+details[open] > summary::before { transform: rotate(45deg); }
+
 /* Status badge */
 .badge {
   display: inline-flex;

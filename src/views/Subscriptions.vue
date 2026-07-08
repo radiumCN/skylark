@@ -13,6 +13,7 @@ import { useTemporaryFlag } from "../composables/useTemporaryFlag";
 import EmptyState from "../components/EmptyState.vue";
 import Skeleton from "../components/Skeleton.vue";
 import ToggleSwitch from "../components/ToggleSwitch.vue";
+import Select from "../components/Select.vue";
 
 const { t } = useI18n();
 const store = useAppStore();
@@ -500,16 +501,13 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
             </span>
           </div>
           <div class="autoupdate-right">
-            <select
+            <Select
               v-if="sub.auto_update"
               class="interval-select"
-              :value="sub.update_interval"
-              @change="changeInterval(sub.id, sub.auto_update, Number(($event.target as HTMLSelectElement).value))"
-            >
-              <option v-for="opt in INTERVAL_OPTIONS" :key="opt.value" :value="opt.value">
-                {{ opt.label }}
-              </option>
-            </select>
+              :model-value="sub.update_interval"
+              :options="INTERVAL_OPTIONS"
+              @update:model-value="changeInterval(sub.id, sub.auto_update, Number($event))"
+            />
             <ToggleSwitch
               :model-value="sub.auto_update"
               :aria-label="sub.auto_update ? t('subscriptions.autoUpdateOff') : t('subscriptions.autoUpdateOn')"

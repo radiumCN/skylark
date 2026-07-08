@@ -18,6 +18,7 @@ import DOMPurify from "dompurify";
 import { formatBytes } from "../utils/format";
 import { useTemporaryFlag } from "../composables/useTemporaryFlag";
 import ToggleSwitch from "../components/ToggleSwitch.vue";
+import Select from "../components/Select.vue";
 
 const store = useAppStore();
 const fb = useFeedbackStore();
@@ -592,10 +593,14 @@ onUnmounted(() => {
           </div>
           <div class="channel-select-wrap">
             <span class="channel-label">{{ t('settings.updateChannel') }}</span>
-            <select class="input select-input" v-model="localConfig.update_channel" style="width:110px">
-              <option value="stable">{{ t('settings.channelStable') }}</option>
-              <option value="beta">{{ t('settings.channelBeta') }}</option>
-            </select>
+            <Select
+              v-model="localConfig.update_channel"
+              :options="[
+                { value: 'stable', label: t('settings.channelStable') },
+                { value: 'beta', label: t('settings.channelBeta') },
+              ]"
+              style="width:110px"
+            />
           </div>
         </div>
 
@@ -1235,13 +1240,16 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.logLevel') }}</div>
             <div class="setting-desc">{{ t('settings.logLevelDesc') }}</div>
           </div>
-          <select class="input select-input" v-model="localConfig.log_level">
-            <option value="trace">{{ t('settings.logLevelTrace') }}</option>
-            <option value="debug">Debug</option>
-            <option value="info">{{ t('settings.logLevelInfo') }}</option>
-            <option value="warn">Warn</option>
-            <option value="error">{{ t('settings.logLevelError') }}</option>
-          </select>
+          <Select
+            v-model="localConfig.log_level"
+            :options="[
+              { value: 'trace', label: t('settings.logLevelTrace') },
+              { value: 'debug', label: 'Debug' },
+              { value: 'info', label: t('settings.logLevelInfo') },
+              { value: 'warn', label: 'Warn' },
+              { value: 'error', label: t('settings.logLevelError') },
+            ]"
+          />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -1249,11 +1257,14 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.theme') }}</div>
             <div class="setting-desc">{{ t('settings.themeDesc') }}</div>
           </div>
-          <select class="input select-input" v-model="localConfig.theme">
-            <option value="system">{{ t('settings.themeSystem') }}</option>
-            <option value="light">{{ t('settings.themeLight') }}</option>
-            <option value="dark">{{ t('settings.themeDark') }}</option>
-          </select>
+          <Select
+            v-model="localConfig.theme"
+            :options="[
+              { value: 'system', label: t('settings.themeSystem') },
+              { value: 'light', label: t('settings.themeLight') },
+              { value: 'dark', label: t('settings.themeDark') },
+            ]"
+          />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -1261,14 +1272,14 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.language') }}</div>
             <div class="setting-desc">{{ t('settings.languageDesc') }}</div>
           </div>
-          <select
-            class="input select-input"
+          <Select
             v-model="localConfig.language"
-            @change="onLanguageChange"
-          >
-            <option value="zh-CN">{{ t('settings.languageZh') }}</option>
-            <option value="en">{{ t('settings.languageEn') }}</option>
-          </select>
+            :options="[
+              { value: 'zh-CN', label: t('settings.languageZh') },
+              { value: 'en', label: t('settings.languageEn') },
+            ]"
+            @update:model-value="onLanguageChange"
+          />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -1461,7 +1472,6 @@ onUnmounted(() => {
 .toggle input:focus-visible + .toggle-track { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 
 .port-input { width: 100px; text-align: right; }
-.select-input { width: 160px; cursor: pointer; }
 
 /* ─── Kernel Card ─── */
 .kernel-card {}

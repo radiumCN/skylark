@@ -2,26 +2,14 @@
 import { ref, nextTick, onMounted, onUnmounted, computed } from "vue";
 import {
   Wifi, WifiOff, ArrowUp, ArrowDown,
-  Filter, Zap, Server, Clock, Globe, Shield, AlertTriangle
+  Filter, Server, Clock, Globe, Shield, AlertTriangle
 } from "@lucide/vue";
-import { Line } from "vue-chartjs";
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Filler,
-  Tooltip,
-} from "chart.js";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { formatBytes } from "../utils/format";
 import ToggleSwitch from "../components/ToggleSwitch.vue";
 import StatTile from "../components/StatTile.vue";
-
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Filler, Tooltip);
 
 const { t } = useI18n();
 const store = useAppStore();
@@ -76,64 +64,12 @@ async function toggleTun() {
   await store.setConnectionMode(turningOff ? "off" : "tun");
   await fetchSystemProxy();
 }
-// Live speed and cumulative totals are tracked globally by the store's traffic
-// monitor (sourced from the Clash API), so they keep accruing regardless of which
-// page is open. The dashboard is a pure viewer of those values.
-const uploadSpeed = computed(() => store.uploadSpeed);
-const downloadSpeed = computed(() => store.downloadSpeed);
+// Cumulative totals since the proxy session start. Live up/down speed now lives
+// in the sidebar, so the dashboard only surfaces the running totals here.
 const totalUpload = computed(() => store.totalUpload);
 const totalDownload = computed(() => store.totalDownload);
 const memoryUsage = ref<number | null>(null);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
-
-const chartLabels = computed(() =>
-  store.trafficHistory.map((_, i) => (i === store.trafficHistory.length - 1 ? "now" : ""))
-);
-
-const chartData = computed(() => ({
-  labels: chartLabels.value,
-  datasets: [
-    {
-      label: t("home.upload"),
-      data: store.trafficHistory.map((p) => p.upload / 1024),
-      borderColor: "#5e6ad2",
-      backgroundColor: "rgba(94, 106, 210,0.08)",
-      borderWidth: 1.5,
-      fill: true,
-      tension: 0.4,
-      pointRadius: 0,
-    },
-    {
-      label: t("home.download"),
-      data: store.trafficHistory.map((p) => p.download / 1024),
-      borderColor: "#0e8f5a",
-      backgroundColor: "rgba(14, 143, 90,0.08)",
-      borderWidth: 1.5,
-      fill: true,
-      tension: 0.4,
-      pointRadius: 0,
-    },
-  ],
-}));
-
-const chartOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  animation: { duration: 0 },
-  scales: {
-    x: { display: false },
-    y: {
-      display: true,
-      grid: { color: "rgba(128,128,128,0.08)" },
-      ticks: {
-        color: "var(--color-text-muted)",
-        font: { size: 10 },
-        callback: (v: string | number) => `${Number(v).toFixed(0)} KB/s`,
-      },
-    },
-  },
-  plugins: { legend: { display: false }, tooltip: { mode: "index" as const, intersect: false } },
-};
 
 // Proxy session timer — tracks how long the proxy has been actively proxying in the
 // current session. The session START lives in the store (`proxySessionStartMs`) so it
@@ -307,64 +243,39 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Dashboard bento: left = node + uptime tiles, right = realtime chart -->
-    <div class="dashboard-grid">
-      <div class="dashboard-col">
-        <StatTile
-          :icon="Server"
-          :label="t('home.currentNode')"
-          :value="store.isAutoGroup ? t('home.autoSelect') : (store.activeNode?.name ?? t('home.noneSelected'))"
-          :sub="store.isAutoGroup
-            ? (store.activeNodeNow ? `→ ${store.activeNodeNow}` : t('home.dynamicSelecting'))
-            : (store.activeNode?.server ?? '--')"
-          accent="primary"
-          compact
-        />
-        <StatTile
-          :icon="Clock"
-          :label="t('home.uptime')"
-          :value="displayUptime"
-          :sub="memoryUsage !== null
-            ? `${t('home.memory', { value: formatBytes(memoryUsage) })} · ${store.status.version ?? 'sing-box'}`
-            : (store.status.version ?? 'sing-box')"
-          accent="amber"
-        />
-      </div>
-
-      <!-- Traffic Chart -->
-      <div class="card chart-card">
-        <div class="chart-header">
-          <Zap :size="15" />
-          <span>{{ t('home.realtimeTraffic') }}</span>
-          <div class="chart-legend">
-            <span class="legend-item upload-color"><i class="legend-dot" /> {{ t('home.upload') }}</span>
-            <span class="legend-item download-color"><i class="legend-dot" /> {{ t('home.download') }}</span>
-          </div>
-        </div>
-        <div class="chart-body">
-          <Line v-if="store.trafficHistory.length > 1" :data="chartData" :options="chartOptions" />
-          <div v-else class="chart-empty">{{ t('home.chartEmpty') }}</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Traffic speed tiles -->
-    <div class="traffic-row">
+    <!-- Key status tiles. Live up/down speed now lives in the sidebar; the
+         dashboard shows the active node, session uptime, and running totals. -->
+    <div class="stat-grid">
       <StatTile
-        :icon="ArrowUp"
-        :label="t('home.uploadSpeed')"
-        :value="`${formatBytes(uploadSpeed)}/s`"
-        :sub="t('home.totalSinceStart', { value: formatBytes(totalUpload) })"
+        :icon="Server"
+        :label="t('home.currentNode')"
+        :value="store.isAutoGroup ? t('home.autoSelect') : (store.activeNode?.name ?? t('home.noneSelected'))"
+        :sub="store.isAutoGroup
+          ? (store.activeNodeNow ? `→ ${store.activeNodeNow}` : t('home.dynamicSelecting'))
+          : (store.activeNode?.server ?? '--')"
         accent="primary"
         compact
       />
       <StatTile
+        :icon="Clock"
+        :label="t('home.uptime')"
+        :value="displayUptime"
+        :sub="memoryUsage !== null
+          ? `${t('home.memory', { value: formatBytes(memoryUsage) })} · ${store.status.version ?? 'sing-box'}`
+          : (store.status.version ?? 'sing-box')"
+        accent="amber"
+      />
+      <StatTile
+        :icon="ArrowUp"
+        :label="t('home.totalUpload')"
+        :value="formatBytes(totalUpload)"
+        accent="primary"
+      />
+      <StatTile
         :icon="ArrowDown"
-        :label="t('home.downloadSpeed')"
-        :value="`${formatBytes(downloadSpeed)}/s`"
-        :sub="t('home.totalSinceStart', { value: formatBytes(totalDownload) })"
+        :label="t('home.totalDownload')"
+        :value="formatBytes(totalDownload)"
         accent="success"
-        compact
       />
     </div>
   </div>
@@ -439,52 +350,20 @@ onUnmounted(() => {
   background: var(--color-primary-soft); color: var(--color-primary);
 }
 
-/* Bento dashboard — left tile column + realtime chart */
-.dashboard-grid {
+/* Status tiles — responsive grid: 4-up on wide, 2-up when the window narrows. */
+.stat-grid {
   display: grid;
-  grid-template-columns: 1fr 1.4fr;
-  gap: var(--space-3);
-  align-items: stretch;
-}
-.dashboard-col {
-  display: flex;
-  flex-direction: column;
+  grid-template-columns: repeat(4, 1fr);
   gap: var(--space-3);
 }
-.dashboard-col > :deep(.stat-tile) { flex: 1; }
+@media (max-width: 720px) {
+  .stat-grid { grid-template-columns: repeat(2, 1fr); }
+}
 
 /* Icon tints used by the control-center rows */
 .icon-blue { background: var(--color-primary-soft); color: var(--color-primary); }
 .icon-violet { background: rgba(124, 92, 236, 0.13); color: var(--accent-violet); }
 .icon-teal { background: rgba(14, 155, 142, 0.14); color: var(--accent-teal); }
-
-/* Traffic speed tiles — 2-up compact row */
-.traffic-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-3);
-}
-
-.chart-card { padding: var(--space-4); box-shadow: var(--shadow-md), var(--edge-highlight); }
-.chart-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text);
-  margin-bottom: 12px;
-}
-.chart-legend { margin-left: auto; display: flex; gap: 12px; }
-.legend-item { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; }
-.legend-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; display: inline-block; }
-.upload-color { color: var(--color-primary); }
-.download-color { color: var(--color-success); }
-.chart-body { height: 160px; }
-.chart-empty {
-  height: 100%; display: flex; align-items: center; justify-content: center;
-  color: var(--color-text-muted); font-size: 13px;
-}
 
 /* Connection control rows (inside the Control Center panel) */
 .net-row {

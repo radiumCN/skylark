@@ -10,10 +10,13 @@ import {
   ScrollText,
   Filter,
   Settings,
+  ArrowUp,
+  ArrowDown,
 } from "@lucide/vue";
 import { listen } from "@tauri-apps/api/event";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
+import { formatBytes } from "../utils/format";
 import logoUrl from "../assets/logo.png";
 
 const route = useRoute();
@@ -76,6 +79,21 @@ onMounted(() => {
         <span class="status-dot" :class="{ running: store.proxying }" />
         <span>{{ store.proxying ? t('sidebar.connected') : t('sidebar.disconnected') }}</span>
       </div>
+
+      <!-- Live traffic — app-wide poller keeps these fresh on every page. Shown
+           only while proxying; reveal is animated to avoid a layout jump. -->
+      <Transition name="traffic">
+        <div v-if="store.proxying" class="sidebar-traffic">
+          <div class="traffic-cell up" :title="t('home.uploadSpeed')">
+            <ArrowUp :size="12" />
+            <span class="traffic-val">{{ formatBytes(store.uploadSpeed) }}/s</span>
+          </div>
+          <div class="traffic-cell down" :title="t('home.downloadSpeed')">
+            <ArrowDown :size="12" />
+            <span class="traffic-val">{{ formatBytes(store.downloadSpeed) }}/s</span>
+          </div>
+        </div>
+      </Transition>
 
       <button
         class="nav-item"
@@ -190,6 +208,44 @@ onMounted(() => {
   width: 100%;
 }
 .proxy-status.running { color: var(--color-success); }
+
+/* Live traffic readout (up/down speed). Tabular figures so the digits don't
+   jitter as the numbers tick; direction is carried by the arrow icon, not
+   colour alone. Upload=primary / download=success, matching the dashboard. */
+.sidebar-traffic {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-1);
+  padding: 6px 10px;
+  margin-bottom: 2px;
+  border-radius: var(--radius-md);
+  background: var(--color-neutral-soft);
+  font-variant-numeric: tabular-nums;
+}
+.traffic-cell {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+}
+.traffic-cell.up { color: var(--color-primary); }
+.traffic-cell.down { color: var(--color-success); }
+.traffic-cell svg { flex-shrink: 0; }
+.traffic-val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Dark surfaces need a brighter emerald for the download figure to stay legible. */
+html[data-theme="dark"] .traffic-cell.down { color: #34d399; }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) .traffic-cell.down { color: #34d399; }
+}
+.traffic-enter-active, .traffic-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.traffic-enter-from, .traffic-leave-to {
+  opacity: 0;
+  transform: translateY(4px);
+}
 .status-dot {
   width: 7px;
   height: 7px;

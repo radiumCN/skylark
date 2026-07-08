@@ -57,6 +57,8 @@ export default {
     uploadSpeed: "Upload Speed",
     downloadSpeed: "Download Speed",
     totalSinceStart: "Total since start: {value}",
+    totalUpload: "Total Upload",
+    totalDownload: "Total Download",
     realtimeTraffic: "Realtime Traffic",
     upload: "Upload",
     download: "Download",

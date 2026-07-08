@@ -58,6 +58,8 @@ export default {
     uploadSpeed: "上传速率",
     downloadSpeed: "下载速率",
     totalSinceStart: "启动后累计: {value}",
+    totalUpload: "累计上传",
+    totalDownload: "累计下载",
     realtimeTraffic: "实时流量",
     upload: "上传",
     download: "下载",

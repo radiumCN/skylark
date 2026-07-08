@@ -13,10 +13,43 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 fn open_daily_log_file() -> Option<(std::fs::File, String)> {
     let dir = crate::config::app_data_dir().join("logs");
     std::fs::create_dir_all(&dir).ok()?;
+    // Prune before opening today's file, so retention runs both at core start and on each
+    // day rollover — old files never accumulate without bound.
+    prune_old_logs(&dir);
     let stamp = chrono::Local::now().format("%Y%m%d").to_string();
     let path = dir.join(format!("skylark-{}.log", stamp));
     let file = std::fs::OpenOptions::new().create(true).append(true).open(path).ok()?;
     Some((file, stamp))
+}
+
+/// Number of days of daily log files to keep, counting today. Anything older is deleted.
+const LOG_RETENTION_DAYS: i64 = 7;
+
+/// Delete daily log files older than [`LOG_RETENTION_DAYS`] so `logs/` keeps only the most
+/// recent week. Only files matching exactly `skylark-YYYYMMDD.log` with a parseable date are
+/// considered — any other file in the directory (e.g. singbox-*.log) is left untouched.
+/// Best-effort: unreadable dir / undeletable file is ignored.
+fn prune_old_logs(dir: &std::path::Path) {
+    // Keep today plus the previous RETENTION-1 days; delete strictly older stamps.
+    let cutoff = chrono::Local::now().date_naive() - chrono::Duration::days(LOG_RETENTION_DAYS - 1);
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let stamp = match name.strip_prefix("skylark-").and_then(|s| s.strip_suffix(".log")) {
+            Some(s) => s,
+            None => continue,
+        };
+        // Only prune files whose stamp is a valid date — never touch anything we can't parse.
+        if let Ok(date) = chrono::NaiveDate::parse_from_str(stamp, "%Y%m%d") {
+            if date < cutoff {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
 }
 
 /// Windows CREATE_NO_WINDOW flag: prevents a console window from popping up

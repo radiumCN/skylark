@@ -350,14 +350,12 @@ onUnmounted(() => {
   background: var(--color-primary-soft); color: var(--color-primary);
 }
 
-/* Status tiles — responsive grid: 4-up on wide, 2-up when the window narrows. */
+/* Status tiles — two per row (2×2). Four across is too cramped and overflows
+   the content column in a narrow window. */
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: var(--space-3);
-}
-@media (max-width: 720px) {
-  .stat-grid { grid-template-columns: repeat(2, 1fr); }
 }
 
 /* Icon tints used by the control-center rows */

@@ -8,8 +8,10 @@ import { useI18n } from "vue-i18n";
 import { useTemporaryFlag } from "../composables/useTemporaryFlag";
 import { copyToClipboard } from "../utils/clipboard";
 import EmptyState from "../components/EmptyState.vue";
+import { useFeedbackStore } from "../stores/feedback";
 
 const { t } = useI18n();
+const fb = useFeedbackStore();
 
 const LOG_CAP = 1000;
 const logs = ref<string[]>([]);
@@ -76,9 +78,9 @@ async function exportLogs() {
     revealItemInDir(path).catch(() => {
       // Reveal may be unavailable; the file is still written.
     });
-    alert(t("logs.exportSuccess", { path }));
+    fb.toastSuccess(t("logs.exportSuccess", { path }));
   } catch (e) {
-    alert(t("logs.exportFailed", { error: e }));
+    fb.toastError(t("logs.exportFailed", { error: e }));
   } finally {
     exporting.value = false;
   }

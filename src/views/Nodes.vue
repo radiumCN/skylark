@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted } from "vue";
 import { Gauge, RefreshCw, CheckCircle, Signal, Zap, ArrowUpDown, Plus, Trash2, Pencil, Layers, ChevronDown } from "@lucide/vue";
 import { useAppStore } from "../stores/app";
+import { useFeedbackStore } from "../stores/feedback";
 import { useI18n } from "vue-i18n";
 import { useDelayedRefresh } from "../composables/useDelayedRefresh";
 import EmptyState from "../components/EmptyState.vue";
@@ -9,6 +10,7 @@ import Skeleton from "../components/Skeleton.vue";
 
 const { t } = useI18n();
 const store = useAppStore();
+const fb = useFeedbackStore();
 const { refreshing, refresh } = useDelayedRefresh();
 const testingAll = ref(false);
 const testingGroup = ref(false);
@@ -87,7 +89,7 @@ async function saveGroup() {
   showGroupEditor.value = false;
 }
 async function deleteGroup(id: string) {
-  if (!confirm(t("nodes.confirmDeleteGroup"))) return;
+  if (!(await fb.confirm({ message: t("nodes.confirmDeleteGroup"), danger: true }))) return;
   await store.saveProxyGroups(store.proxyGroups.filter((g) => g.id !== id));
 }
 async function useGroup(name: string) {

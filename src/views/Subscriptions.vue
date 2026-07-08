@@ -6,6 +6,7 @@ import {
 import QRCode from "qrcode";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
+import { useFeedbackStore } from "../stores/feedback";
 import { formatBytes } from "../utils/format";
 import { copyToClipboard, readFromClipboard } from "../utils/clipboard";
 import { useTemporaryFlag } from "../composables/useTemporaryFlag";
@@ -15,6 +16,7 @@ import ToggleSwitch from "../components/ToggleSwitch.vue";
 
 const { t } = useI18n();
 const store = useAppStore();
+const fb = useFeedbackStore();
 
 onMounted(() => {
   // Shared poller keeps the active auto group's current node fresh for the badge below.
@@ -143,7 +145,7 @@ async function updateSub(id: string) {
 }
 
 async function deleteSub(id: string, name: string) {
-  if (confirm(t("subscriptions.confirmDelete", { name }))) {
+  if (await fb.confirm({ message: t("subscriptions.confirmDelete", { name }), danger: true })) {
     await store.deleteSubscription(id);
   }
 }

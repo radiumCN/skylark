@@ -24,6 +24,7 @@ export default {
     save: "保存",
     cancel: "取消",
     confirm: "确认",
+    confirmTitle: "确认操作",
     delete: "删除",
     loading: "加载中...",
   },

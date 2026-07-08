@@ -2,6 +2,8 @@
 import { onMounted, watch } from "vue";
 import { RouterView } from "vue-router";
 import Sidebar from "./components/Sidebar.vue";
+import ConfirmDialog from "./components/ConfirmDialog.vue";
+import ToastHost from "./components/ToastHost.vue";
 import { useAppStore } from "./stores/app";
 import { setLocale } from "./i18n";
 
@@ -40,6 +42,10 @@ onMounted(async () => {
         </Transition>
       </RouterView>
     </main>
+
+    <!-- Global feedback surfaces (replace native confirm()/alert()) -->
+    <ConfirmDialog />
+    <ToastHost />
   </div>
 </template>
 

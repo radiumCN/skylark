@@ -23,6 +23,7 @@ export default {
     save: "Save",
     cancel: "Cancel",
     confirm: "Confirm",
+    confirmTitle: "Confirm Action",
     delete: "Delete",
     loading: "Loading...",
   },

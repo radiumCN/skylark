@@ -10,6 +10,9 @@ import {
 } from "@lucide/vue";
 import EmptyState from "../components/EmptyState.vue";
 import ToggleSwitch from "../components/ToggleSwitch.vue";
+import { useFeedbackStore } from "../stores/feedback";
+
+const fb = useFeedbackStore();
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -155,7 +158,7 @@ async function toggleRule(id: string) {
 }
 
 async function deleteRule(id: string) {
-  if (!confirm(t("rules.confirmDeleteRule"))) return;
+  if (!(await fb.confirm({ message: t("rules.confirmDeleteRule"), danger: true }))) return;
   rules.value = await invoke<RouteRule[]>("cmd_delete_rule", { id });
   if (expandedId.value === id) expandedId.value = null;
 }
@@ -170,7 +173,7 @@ async function saveAll() {
 }
 
 async function resetToDefault() {
-  if (!confirm(t("rules.confirmReset"))) return;
+  if (!(await fb.confirm({ message: t("rules.confirmReset"), danger: true }))) return;
   rules.value = await invoke<RouteRule[]>("cmd_reset_rules");
 }
 
@@ -285,7 +288,7 @@ async function addProvider() {
 }
 
 async function deleteProvider(id: string) {
-  if (!confirm(t("rules.confirmDeleteProvider"))) return;
+  if (!(await fb.confirm({ message: t("rules.confirmDeleteProvider"), danger: true }))) return;
   providers.value = await invoke<RuleProvider[]>("cmd_delete_rule_provider", { id });
 }
 

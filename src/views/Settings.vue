@@ -11,6 +11,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useI18n } from "vue-i18n";
 import { useAppStore, type AppConfig } from "../stores/app";
+import { useFeedbackStore } from "../stores/feedback";
 import { setLocale } from "../i18n";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -19,6 +20,7 @@ import { useTemporaryFlag } from "../composables/useTemporaryFlag";
 import ToggleSwitch from "../components/ToggleSwitch.vue";
 
 const store = useAppStore();
+const fb = useFeedbackStore();
 const { t } = useI18n();
 
 // Render release notes (GitHub release bodies) as Markdown. The source is remote, so the
@@ -89,7 +91,7 @@ async function saveCurrentProfile() {
     newProfileName.value = "";
     await refreshProfiles();
   } catch (e) {
-    alert(String(e));
+    fb.toastError(String(e));
   } finally {
     profileBusy.value = false;
   }
@@ -99,15 +101,15 @@ async function switchProfile(name: string) {
   try {
     await store.loadProfile(name);
     localConfig.value = { ...store.config };
-    alert(t("settings.profileSwitched", { name }));
+    fb.toastSuccess(t("settings.profileSwitched", { name }));
   } catch (e) {
-    alert(String(e));
+    fb.toastError(String(e));
   } finally {
     profileBusy.value = false;
   }
 }
 async function removeProfile(name: string) {
-  if (!confirm(t("settings.confirmDeleteProfile", { name }))) return;
+  if (!(await fb.confirm({ message: t("settings.confirmDeleteProfile", { name }), danger: true }))) return;
   await store.deleteProfile(name);
   await refreshProfiles();
 }
@@ -200,9 +202,9 @@ async function exportConfig() {
     } catch {
       /** Reveal may be unavailable; the file is still written. */
     }
-    alert(t('settings.exportedTo', { path }));
+    fb.toastSuccess(t('settings.exportedTo', { path }));
   } catch (e) {
-    alert(t('settings.exportFailed', { e }));
+    fb.toastError(t('settings.exportFailed', { e }));
   } finally {
     exportingConfig.value = false;
   }
@@ -212,10 +214,10 @@ async function exportConfig() {
 async function importConfig() {
   const content = importText.value.trim();
   if (!content) {
-    alert(t('settings.pasteBackupContent'));
+    fb.toastInfo(t('settings.pasteBackupContent'));
     return;
   }
-  if (!confirm(t('settings.importConfirm'))) return;
+  if (!(await fb.confirm({ message: t('settings.importConfirm'), danger: true }))) return;
   importingConfig.value = true;
   try {
     await invoke("cmd_import_config", { content });
@@ -228,9 +230,9 @@ async function importConfig() {
     ]);
     showImportModal.value = false;
     importText.value = "";
-    alert(t('settings.importSuccess'));
+    fb.toastSuccess(t('settings.importSuccess'));
   } catch (e) {
-    alert(t('settings.importFailed', { e }));
+    fb.toastError(t('settings.importFailed', { e }));
   } finally {
     importingConfig.value = false;
   }

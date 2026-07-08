@@ -146,6 +146,10 @@ export const useAppStore = defineStore("app", () => {
   const uploadSpeed = ref(0);
   const downloadSpeed = ref(0);
   const loading = ref(false);
+  // Flips true once the first data load (init) resolves and never flips back, so
+  // views can show a loading skeleton on cold start without it re-triggering
+  // during later connection ops (which toggle `loading`).
+  const initialized = ref(false);
   const error = ref<string | null>(null);
   // The connection target currently being applied, for optimistic UI. The dashboard
   // toggles reflect this immediately (flip + "连接中…") while the core (re)starts in
@@ -689,12 +693,18 @@ export const useAppStore = defineStore("app", () => {
   }
 
   async function init() {
-    await Promise.all([
-      fetchStatus(),
-      fetchSubscriptions(),
-      fetchNodes(),
-      fetchConfig(),
-    ]);
+    try {
+      await Promise.all([
+        fetchStatus(),
+        fetchSubscriptions(),
+        fetchNodes(),
+        fetchConfig(),
+      ]);
+    } finally {
+      // Always leave the loading skeletons even if a startup fetch failed —
+      // otherwise the list views would shimmer forever.
+      initialized.value = true;
+    }
     // Reconcile the autostart toggle with the real OS state so the UI never lies,
     // and re-apply the configured value in case a previous session failed to persist it.
     try {
@@ -759,6 +769,7 @@ export const useAppStore = defineStore("app", () => {
     uploadSpeed,
     downloadSpeed,
     loading,
+    initialized,
     error,
     connecting,
     systemProxyEnabled,

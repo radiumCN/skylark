@@ -1,13 +1,22 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
-import { Gauge, RefreshCw, CheckCircle, Signal, Zap, ArrowUpDown, Plus, Trash2, Pencil, Layers } from "@lucide/vue";
+import { Gauge, RefreshCw, CheckCircle, Signal, Zap, ArrowUpDown, Plus, Trash2, Pencil, Layers, ChevronDown } from "@lucide/vue";
 import { useAppStore } from "../stores/app";
+import { useFeedbackStore } from "../stores/feedback";
 import { useI18n } from "vue-i18n";
 import { useDelayedRefresh } from "../composables/useDelayedRefresh";
 import EmptyState from "../components/EmptyState.vue";
+import Skeleton from "../components/Skeleton.vue";
+import Select from "../components/Select.vue";
 
 const { t } = useI18n();
+
+const groupTypeOptions = computed(() => [
+  { value: "urltest", label: t("nodes.autoSelectByLatency") },
+  { value: "selector", label: t("nodes.manualSelect") },
+]);
 const store = useAppStore();
+const fb = useFeedbackStore();
 const { refreshing, refresh } = useDelayedRefresh();
 const testingAll = ref(false);
 const testingGroup = ref(false);
@@ -44,6 +53,7 @@ function manualRefresh() {
 }
 
 // ─── Custom proxy groups ─────────────────────────────────────────────
+const groupsOpen = ref(true); // collapse state for the groups card (layout affordance)
 const showGroupEditor = ref(false);
 const editingGroupId = ref<string | null>(null);
 const groupForm = ref<{ name: string; group_type: string; nodes: string[] }>({
@@ -85,7 +95,7 @@ async function saveGroup() {
   showGroupEditor.value = false;
 }
 async function deleteGroup(id: string) {
-  if (!confirm(t("nodes.confirmDeleteGroup"))) return;
+  if (!(await fb.confirm({ message: t("nodes.confirmDeleteGroup"), danger: true }))) return;
   await store.saveProxyGroups(store.proxyGroups.filter((g) => g.id !== id));
 }
 async function useGroup(name: string) {
@@ -214,77 +224,88 @@ const autoNowName = computed(() => store.activeNodeNow);
 
 <template>
   <div class="page">
-    <div class="page-header">
-      <h1 class="page-title">{{ t("nodes.title") }}</h1>
-      <div class="header-actions">
-        <span class="node-count">{{ t("nodes.nodeCount", { n: store.nodes.length }) }}</span>
-        <button class="btn btn-ghost" :disabled="testingAll" @click="testAll" :title="t('nodes.testAllTip')">
-          <Gauge :size="14" :class="{ spin: testingAll }" />
-          {{ testingAll ? t("nodes.testing") : t("nodes.testAll") }}
-        </button>
-        <!-- Sort selector -->
-        <div class="sort-group">
-          <ArrowUpDown :size="13" />
-          <button
-            v-for="[k, label] in [['none', t('nodes.sortDefault')],['latency', t('nodes.sortLatency')],['speed', t('nodes.sortSpeed')]]"
-            :key="k"
-            class="sort-btn"
-            :class="{ active: sortBy === k }"
-            @click="sortBy = k as typeof sortBy"
-          >{{ label }}</button>
+    <!-- Sticky glass toolbar: header actions + filters travel with the scroll. -->
+    <div class="toolbar">
+      <div class="page-header">
+        <h1 class="page-title">{{ t("nodes.title") }}</h1>
+        <div class="header-actions">
+          <span class="node-count">{{ t("nodes.nodeCount", { n: store.nodes.length }) }}</span>
+          <button class="btn btn-ghost" :disabled="testingAll" @click="testAll" :title="t('nodes.testAllTip')">
+            <Gauge :size="14" :class="{ spin: testingAll }" />
+            {{ testingAll ? t("nodes.testing") : t("nodes.testAll") }}
+          </button>
+          <!-- Sort selector -->
+          <div class="sort-wrap">
+            <ArrowUpDown :size="13" class="sort-icon" />
+            <div class="segmented">
+              <button
+                v-for="[k, label] in [['none', t('nodes.sortDefault')],['latency', t('nodes.sortLatency')],['speed', t('nodes.sortSpeed')]]"
+                :key="k"
+                class="segmented__item"
+                :class="{ active: sortBy === k }"
+                @click="sortBy = k as typeof sortBy"
+              >{{ label }}</button>
+            </div>
+          </div>
+
+          <button class="btn btn-ghost" @click="manualRefresh" :disabled="refreshing">
+            <RefreshCw :size="14" :class="{ spin: refreshing }" />
+            {{ t("nodes.refresh") }}
+          </button>
         </div>
-
-        <button class="btn btn-ghost" @click="manualRefresh" :disabled="refreshing">
-          <RefreshCw :size="14" :class="{ spin: refreshing }" />
-          {{ t("nodes.refresh") }}
-        </button>
       </div>
-    </div>
 
-    <!-- Filters -->
-    <div class="filters">
-      <input class="input search-input" v-model="search" :placeholder="t('nodes.searchPlaceholder')" />
+      <!-- Filters -->
+      <div class="filters">
+        <input class="input search-input" v-model="search" :placeholder="t('nodes.searchPlaceholder')" />
 
-      <!-- Subscription tabs (show only if more than one sub) -->
-      <div v-if="store.subscriptions.length > 0" class="sub-tabs">
-        <button
-          class="sub-tab"
-          :class="{ active: filterSubId === 'all' }"
-          @click="switchSub('all')"
-        >
-          {{ t("nodes.allTab") }} <span class="sub-count">{{ store.nodes.length }}</span>
-        </button>
-        <button
-          v-for="sub in store.subscriptions"
-          :key="sub.id"
-          class="sub-tab"
-          :class="{ active: filterSubId === sub.id }"
-          @click="switchSub(sub.id)"
-        >
-          {{ sub.name }}
-          <span class="sub-count">{{ store.nodes.filter(n => n.subscription_id === sub.id).length }}</span>
-        </button>
+        <!-- Subscription selector (show only if there is at least one sub) -->
+        <div v-if="store.subscriptions.length > 0" class="segmented sub-segmented">
+          <button
+            class="segmented__item"
+            :class="{ active: filterSubId === 'all' }"
+            @click="switchSub('all')"
+          >
+            {{ t("nodes.allTab") }} <span class="sub-count">{{ store.nodes.length }}</span>
+          </button>
+          <button
+            v-for="sub in store.subscriptions"
+            :key="sub.id"
+            class="segmented__item"
+            :class="{ active: filterSubId === sub.id }"
+            @click="switchSub(sub.id)"
+          >
+            {{ sub.name }}
+            <span class="sub-count">{{ store.nodes.filter(n => n.subscription_id === sub.id).length }}</span>
+          </button>
+        </div>
       </div>
     </div>
 
     <!-- Custom proxy groups -->
     <div v-if="store.nodes.length > 0" class="card group-card">
       <div class="group-head">
-        <div class="group-title">
+        <button
+          class="group-title"
+          :aria-expanded="groupsOpen || showGroupEditor"
+          @click="groupsOpen = !groupsOpen"
+        >
           <Layers :size="14" />
           <span>{{ t("nodes.customGroups") }}</span>
-        </div>
+          <span v-if="store.proxyGroups.length > 0" class="group-count">{{ store.proxyGroups.length }}</span>
+          <ChevronDown :size="15" class="group-chevron" :class="{ open: groupsOpen || showGroupEditor }" />
+        </button>
         <button class="btn btn-ghost btn-sm" @click="openNewGroup">
           <Plus :size="13" />
           {{ t("nodes.newGroup") }}
         </button>
       </div>
 
-      <div v-if="store.proxyGroups.length === 0 && !showGroupEditor" class="group-empty">
+      <div v-if="(groupsOpen || showGroupEditor) && store.proxyGroups.length === 0 && !showGroupEditor" class="group-empty">
         {{ t("nodes.groupEmptyHint") }}
       </div>
 
-      <div v-if="store.proxyGroups.length > 0" class="group-list">
+      <div v-if="(groupsOpen || showGroupEditor) && store.proxyGroups.length > 0" class="group-list">
         <div
           v-for="g in store.proxyGroups"
           :key="g.id"
@@ -316,10 +337,7 @@ const autoNowName = computed(() => store.activeNodeNow);
       <div v-if="showGroupEditor" class="group-editor">
         <div class="editor-row">
           <input class="input" v-model="groupForm.name" :placeholder="t('nodes.groupNamePlaceholder')" />
-          <select class="input editor-type" v-model="groupForm.group_type">
-            <option value="urltest">{{ t("nodes.autoSelectByLatency") }}</option>
-            <option value="selector">{{ t("nodes.manualSelect") }}</option>
-          </select>
+          <Select class="editor-type" v-model="groupForm.group_type" :options="groupTypeOptions" />
         </div>
         <div class="member-label">{{ t("nodes.selectMembers", { n: groupForm.nodes.length }) }}</div>
         <div class="member-grid">
@@ -355,9 +373,21 @@ const autoNowName = computed(() => store.activeNodeNow);
       <span>⚡ {{ t("nodes.speedNoticePrefix") }}<strong>{{ t("nodes.speedNoticeStrong") }}</strong></span>
     </div>
 
+    <!-- Cold-start skeleton (before the first data load resolves) -->
+    <div v-if="store.nodes.length === 0 && !store.initialized" class="node-skel-list">
+      <div v-for="i in 6" :key="i" class="card node-skel">
+        <Skeleton width="8px" height="8px" circle />
+        <div class="node-skel-body">
+          <Skeleton width="42%" height="13px" />
+          <Skeleton width="26%" height="10px" />
+        </div>
+        <Skeleton width="52px" height="20px" radius="100px" />
+      </div>
+    </div>
+
     <!-- Empty -->
     <EmptyState
-      v-if="store.nodes.length === 0"
+      v-else-if="store.nodes.length === 0"
       :icon="Signal"
       :title="t('nodes.emptyTitle')"
       :desc="t('nodes.emptyDesc')"
@@ -465,57 +495,73 @@ const autoNowName = computed(() => store.activeNodeNow);
 </template>
 
 <style scoped>
-.page { display: flex; flex-direction: column; gap: 14px; max-width: 800px; }
-.page-header { display: flex; align-items: center; justify-content: space-between; }
-.page-title { font-size: 20px; font-weight: 600; }
-.header-actions { display: flex; align-items: center; gap: 8px; }
-.node-count { font-size: 12px; color: var(--color-text-secondary); }
-
-.filters { display: flex; flex-direction: column; gap: 10px; }
-.search-input { max-width: 340px; }
-
-.sub-tabs {
-  display: flex; gap: 4px; flex-wrap: wrap;
-  padding-bottom: 8px;
+/* Sticky toolbar: title/actions + filters pinned to the scroll top. Full-bleed
+   over the shell's 24px padding so it reads as an edge-to-edge header band rather
+   than a flat rectangle floating over the ambient glow; opaque bg hides the list
+   scrolling underneath. */
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: -24px -24px 0;
+  padding: 24px 24px var(--space-3);
+  background: var(--color-bg);
   border-bottom: 1px solid var(--color-border);
 }
-.sub-tab {
-  display: flex; align-items: center; gap: 5px;
-  padding: 5px 14px; border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
-  background: transparent; color: var(--color-text-secondary);
-  font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s;
-}
-.sub-tab:hover { background: var(--color-neutral); color: var(--color-text); }
-.sub-tab.active {
-  background: rgba(79, 110, 247,0.1);
-  border-color: rgba(79, 110, 247,0.35);
-  color: var(--color-primary);
-}
+.node-count { font-size: 12px; color: var(--color-text-secondary); }
+
+.filters { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.search-input { max-width: 340px; flex: 1 1 220px; }
+
+/* Sort control: leading icon + shared segmented pill group. */
+.sort-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.sort-icon { color: var(--color-text-muted); flex-shrink: 0; }
+
+/* Subscription selector reuses the segmented control; may wrap when many subs. */
+.sub-segmented { flex-wrap: wrap; }
 .sub-count {
   font-size: 10px; font-weight: 700;
-  background: var(--color-neutral-strong);
-  border-radius: 100px; padding: 0 5px; min-width: 18px; text-align: center;
+  background: var(--color-neutral-strong); color: var(--color-text-secondary);
+  border-radius: var(--radius-sm); padding: 0 5px; min-width: 18px; text-align: center;
 }
-.sub-tab.active .sub-count {
-  background: rgba(79, 110, 247,0.15);
+.segmented__item.active .sub-count {
+  background: var(--color-primary-soft); color: var(--color-primary);
 }
 
 .node-list { display: flex; flex-direction: column; gap: 6px; }
+.node-skel-list { display: flex; flex-direction: column; gap: 6px; }
+.node-skel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+}
+.node-skel-body { flex: 1; display: flex; flex-direction: column; gap: var(--space-2); }
 .node-item {
   padding: 12px 16px;
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  cursor: pointer; transition: all 0.15s;
+  cursor: pointer;
+  transition: background 0.15s ease-out, border-color 0.15s ease-out, box-shadow 0.15s ease-out;
   border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
 }
-.node-item:hover { box-shadow: var(--shadow-md); background: var(--color-surface-strong); }
+.node-item:hover {
+  box-shadow: var(--shadow-md);
+  background: var(--color-surface-strong);
+  border-color: var(--color-primary-soft);
+}
 .node-item.active {
-  border-color: rgba(79, 110, 247,0.4);
-  background: rgba(79, 110, 247,0.04);
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  box-shadow: 0 0 0 1px var(--color-primary-glow);
 }
 .auto-item.active {
-  border-color: rgba(193, 128, 30,0.6);
-  background: rgba(193, 128, 30,0.08);
+  border-color: var(--accent-amber);
+  background: var(--color-warning-soft);
+  box-shadow: none;
 }
 .auto-item .auto-icon { color: var(--accent-amber); }
 .auto-item .auto-now { color: var(--accent-amber); font-weight: 500; }
@@ -535,54 +581,69 @@ const autoNowName = computed(() => store.activeNodeNow);
 .node-server { font-size: 11px; color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .node-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-.speed-info { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; min-width: 72px; }
-.latency { font-size: 12px; font-weight: 600; }
-.download-speed { font-size: 11px; font-weight: 500; }
+.speed-info { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; min-width: 72px; }
+.latency {
+  font-size: var(--fs-sm); font-weight: 600;
+  padding: 1px 7px; border-radius: var(--radius-sm);
+  background: var(--color-neutral-soft);
+}
+.download-speed { font-size: var(--fs-xs); font-weight: 500; }
 .icon-btn { padding: 5px !important; }
 
 .no-result { text-align: center; color: var(--color-text-muted); font-size: 13px; padding: 24px; }
 
 .speed-notice {
   display: flex; align-items: center; gap: 8px;
-  padding: 8px 14px; border-radius: 8px; font-size: 12px;
-  background: rgba(202,80,16,0.08); border: 1px solid rgba(202,80,16,0.2);
+  padding: 8px 14px; border-radius: var(--radius-md); font-size: var(--fs-sm);
+  background: var(--color-warning-soft); border: 1px solid var(--color-warning-soft);
   color: var(--color-attention);
 }
 .speed-notice strong { color: var(--color-text); }
 
-.sort-group {
-  display: flex; align-items: center; gap: 3px;
-  padding: 3px 6px 3px 8px; border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
-  color: var(--color-text-muted); font-size: 12px;
-}
-.sort-btn {
-  padding: 2px 7px; border-radius: var(--radius-sm);
-  border: none; background: transparent;
-  color: var(--color-text-secondary);
-  font-size: 11px; cursor: pointer; transition: all 0.15s;
-}
-.sort-btn:hover { background: var(--color-neutral); }
-.sort-btn.active { background: var(--color-primary); color: white; border-radius: var(--radius-sm); }
-
 /* ─── Custom proxy groups ─── */
 .group-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
-.group-head { display: flex; align-items: center; justify-content: space-between; }
-.group-title { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; }
+.group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.group-title {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 13px; font-weight: 600;
+  padding: 2px 4px; margin: -2px -4px;
+  border: none; background: transparent; color: var(--color-text);
+  border-radius: var(--radius-sm); cursor: pointer;
+  transition: color 0.15s ease-out;
+}
+.group-title:hover { color: var(--color-primary); }
+.group-count {
+  font-size: 10px; font-weight: 700;
+  background: var(--color-neutral-strong); color: var(--color-text-secondary);
+  border-radius: var(--radius-sm); padding: 0 5px; min-width: 18px; text-align: center;
+}
+.group-chevron {
+  color: var(--color-text-muted);
+  transition: transform 0.18s ease-out;
+}
+.group-chevron.open { transform: rotate(180deg); }
 .btn-sm { padding: 3px 10px !important; font-size: 12px; }
 .group-empty { font-size: 12px; color: var(--color-text-muted); }
 .group-list { display: flex; flex-direction: column; gap: 8px; }
 .group-item {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   padding: 8px 12px; border: 1px solid var(--color-border);
-  border-radius: var(--radius-md); background: rgba(128,128,128,0.03);
+  border-left: 2px solid var(--color-border);
+  border-radius: var(--radius-md); background: var(--color-neutral-soft);
+  transition: background 0.15s ease-out, border-color 0.15s ease-out;
 }
-.group-item.active { border-color: var(--color-primary); background: rgba(79, 110, 247,0.06); }
+.group-item:hover { background: var(--color-neutral); }
+.group-item.active {
+  border-color: var(--color-primary);
+  border-left-color: var(--color-primary);
+  background: var(--color-primary-soft);
+  box-shadow: 0 0 0 1px var(--color-primary-glow);
+}
 .group-info { min-width: 0; }
-.group-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.group-name { font-size: var(--fs-md); font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .group-badge {
-  font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 100px;
-  background: rgba(193, 128, 30,0.14); color: var(--accent-amber);
+  font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: var(--radius-sm);
+  background: var(--color-warning-soft); color: var(--accent-amber);
 }
 .group-members { font-size: 11px; color: var(--color-text-muted); margin-top: 2px; }
 .group-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
@@ -591,10 +652,10 @@ const autoNowName = computed(() => store.activeNodeNow);
   display: inline-flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; border: none; border-radius: var(--radius-sm);
   background: transparent; color: var(--color-text-secondary); cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s ease-out, color 0.15s ease-out;
 }
 .icon-btn:hover { background: var(--color-neutral); color: var(--color-text); }
-.icon-btn.danger:hover { background: rgba(209,52,56,0.1); color: var(--color-error); }
+.icon-btn.danger:hover { background: var(--color-error-soft); color: var(--color-error); }
 
 .group-editor {
   display: flex; flex-direction: column; gap: 10px;
@@ -602,7 +663,10 @@ const autoNowName = computed(() => store.activeNodeNow);
 }
 .editor-row { display: flex; gap: 8px; }
 .editor-type { max-width: 180px; }
-.member-label { font-size: 12px; font-weight: 500; color: var(--color-text-secondary); }
+.member-label {
+  font-size: var(--fs-xs); font-weight: 600; color: var(--color-text-secondary);
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
 .member-grid {
   display: flex; flex-wrap: wrap; gap: 6px;
   max-height: 180px; overflow-y: auto;
@@ -610,10 +674,24 @@ const autoNowName = computed(() => store.activeNodeNow);
 .member-chip {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 4px 9px; border: 1px solid var(--color-border);
-  border-radius: 100px; font-size: 12px; cursor: pointer;
-  transition: all 0.15s; user-select: none;
+  border-radius: var(--radius-sm); font-size: var(--fs-sm); cursor: pointer;
+  transition: background 0.15s ease-out, border-color 0.15s ease-out, color 0.15s ease-out;
+  user-select: none;
 }
-.member-chip.on { border-color: var(--color-primary); background: rgba(79, 110, 247,0.08); color: var(--color-primary); }
+.member-chip:hover { background: var(--color-neutral); }
+.member-chip.on { border-color: var(--color-primary); background: var(--color-primary-soft); color: var(--color-primary); }
 .member-chip input { margin: 0; }
 .editor-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ─── Narrow-width fallback: keep everything single-column and legible. ─── */
+@media (max-width: 820px) {
+  .page-header { flex-wrap: wrap; }
+  .header-actions { width: 100%; margin-left: 0; }
+  .node-count { margin-right: auto; }
+  .filters { flex-direction: column; align-items: stretch; }
+  .search-input { max-width: none; flex: 1 1 auto; }
+  .sort-wrap { flex-wrap: wrap; }
+  .editor-row { flex-direction: column; }
+  .editor-type { max-width: none; }
+}
 </style>

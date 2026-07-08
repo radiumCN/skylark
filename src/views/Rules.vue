@@ -5,10 +5,15 @@ import { invoke } from "@tauri-apps/api/core";
 
 const { t } = useI18n();
 import {
-  Plus, Trash2, ToggleLeft, ToggleRight, ChevronDown, ChevronUp,
+  Plus, Trash2, ChevronDown, ChevronUp,
   Filter, Globe, Layers, BookMarked, Info, RotateCcw, GripVertical
 } from "@lucide/vue";
 import EmptyState from "../components/EmptyState.vue";
+import ToggleSwitch from "../components/ToggleSwitch.vue";
+import Select from "../components/Select.vue";
+import { useFeedbackStore } from "../stores/feedback";
+
+const fb = useFeedbackStore();
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -154,7 +159,7 @@ async function toggleRule(id: string) {
 }
 
 async function deleteRule(id: string) {
-  if (!confirm(t("rules.confirmDeleteRule"))) return;
+  if (!(await fb.confirm({ message: t("rules.confirmDeleteRule"), danger: true }))) return;
   rules.value = await invoke<RouteRule[]>("cmd_delete_rule", { id });
   if (expandedId.value === id) expandedId.value = null;
 }
@@ -169,7 +174,7 @@ async function saveAll() {
 }
 
 async function resetToDefault() {
-  if (!confirm(t("rules.confirmReset"))) return;
+  if (!(await fb.confirm({ message: t("rules.confirmReset"), danger: true }))) return;
   rules.value = await invoke<RouteRule[]>("cmd_reset_rules");
 }
 
@@ -284,7 +289,7 @@ async function addProvider() {
 }
 
 async function deleteProvider(id: string) {
-  if (!confirm(t("rules.confirmDeleteProvider"))) return;
+  if (!(await fb.confirm({ message: t("rules.confirmDeleteProvider"), danger: true }))) return;
   providers.value = await invoke<RuleProvider[]>("cmd_delete_rule_provider", { id });
 }
 
@@ -358,10 +363,9 @@ onMounted(() => {
       <div v-if="providers.length === 0" class="provider-empty">{{ t("rules.noRemoteRuleSet") }}</div>
       <div v-else class="provider-list">
         <div v-for="p in providers" :key="p.id" class="provider-item" :class="{ disabled: !p.enabled }">
-          <button class="toggle-btn" :title="p.enabled ? t('rules.clickDisable') : t('rules.clickEnable')" @click="toggleProvider(p.id)">
-            <ToggleRight v-if="p.enabled" :size="18" class="toggle-on" />
-            <ToggleLeft v-else :size="18" class="toggle-off" />
-          </button>
+          <span class="toggle-cell" :title="p.enabled ? t('rules.clickDisable') : t('rules.clickEnable')">
+            <ToggleSwitch :model-value="p.enabled" @update:model-value="toggleProvider(p.id)" />
+          </span>
           <div class="provider-info">
             <div class="provider-name">
               {{ p.name }}
@@ -390,11 +394,14 @@ onMounted(() => {
       </div>
       <div class="form-group">
         <label class="form-label">{{ t("rules.hitAction") }}</label>
-        <select class="input" v-model="newProviderAction">
-          <option value="proxy">{{ t("rules.actionProxy") }}</option>
-          <option value="direct">{{ t("rules.actionDirect") }}</option>
-          <option value="block">{{ t("rules.actionBlock") }}</option>
-        </select>
+        <Select
+          v-model="newProviderAction"
+          :options="[
+            { value: 'proxy', label: t('rules.actionProxy') },
+            { value: 'direct', label: t('rules.actionDirect') },
+            { value: 'block', label: t('rules.actionBlock') },
+          ]"
+        />
       </div>
       <div class="dialog-actions">
         <button class="btn btn-ghost" @click="showProviderDialog = false">{{ t("rules.cancel") }}</button>
@@ -430,14 +437,13 @@ onMounted(() => {
         <div class="rule-header" @click="expandedId = expandedId === rule.id ? null : rule.id">
           <GripVertical :size="14" class="drag-handle" :title="t('rules.dragHint')" @click.stop />
           <div class="rule-order">{{ index + 1 }}</div>
-          <button
-            class="toggle-btn"
+          <span
+            class="toggle-cell"
             :title="rule.enabled ? t('rules.clickDisable') : t('rules.clickEnable')"
-            @click.stop="toggleRule(rule.id)"
+            @click.stop
           >
-            <ToggleRight v-if="rule.enabled" :size="20" class="toggle-on" />
-            <ToggleLeft v-else :size="20" class="toggle-off" />
-          </button>
+            <ToggleSwitch :model-value="rule.enabled" @update:model-value="toggleRule(rule.id)" />
+          </span>
           <div class="rule-info">
             <div class="rule-name">{{ rule.name }}</div>
             <div class="rule-summary">{{ matchSummary(rule) }}</div>
@@ -520,12 +526,15 @@ onMounted(() => {
             </div>
             <div class="form-group half">
               <label class="form-label">{{ t("rules.action") }}</label>
-              <select class="input" v-model="newRule.action">
-                <option value="proxy">{{ t("rules.actionProxy") }}</option>
-                <option value="direct">{{ t("rules.actionDirect") }}</option>
-                <option value="block">{{ t("rules.actionBlock") }}</option>
-                <option value="dns">{{ t("rules.actionDnsHandle") }}</option>
-              </select>
+              <Select
+                v-model="newRule.action"
+                :options="[
+                  { value: 'proxy', label: t('rules.actionProxy') },
+                  { value: 'direct', label: t('rules.actionDirect') },
+                  { value: 'block', label: t('rules.actionBlock') },
+                  { value: 'dns', label: t('rules.actionDnsHandle') },
+                ]"
+              />
             </div>
           </div>
 
@@ -577,11 +586,15 @@ onMounted(() => {
           <div class="form-row">
             <div class="form-group half">
               <label class="form-label">{{ t("rules.networkProtocol") }}</label>
-              <select class="input" v-model="newRule.network">
-                <option :value="null">{{ t("rules.networkAny") }}</option>
-                <option value="tcp">TCP</option>
-                <option value="udp">UDP</option>
-              </select>
+              <Select
+                :model-value="newRule.network ?? ''"
+                :options="[
+                  { value: '', label: t('rules.networkAny') },
+                  { value: 'tcp', label: 'TCP' },
+                  { value: 'udp', label: 'UDP' },
+                ]"
+                @update:model-value="newRule.network = $event === '' ? null : String($event)"
+              />
             </div>
           </div>
         </div>
@@ -605,11 +618,8 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page { display: flex; flex-direction: column; gap: 14px; max-width: 860px; }
-.page-header { display: flex; align-items: flex-start; justify-content: space-between; }
-.page-title { font-size: 20px; font-weight: 600; }
-.page-subtitle { font-size: 12px; color: var(--color-text-muted); margin-top: 2px; }
-.header-actions { display: flex; gap: 8px; }
+/* Page primitives (.page/.page-header/.page-title/.page-subtitle/.header-actions)
+   are provided globally by main.css. */
 
 /* Presets */
 .preset-card { padding: 12px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -638,10 +648,18 @@ onMounted(() => {
 
 /* Rules List */
 .rules-list { display: flex; flex-direction: column; gap: 6px; }
-.rule-item { overflow: hidden; }
+.rule-item {
+  overflow: hidden;
+  transition: border-color 0.15s ease-out, box-shadow 0.15s ease-out, transform 0.15s ease-out;
+}
+.rule-item:hover {
+  border-color: var(--color-neutral-strong);
+  box-shadow: var(--shadow-sm), var(--edge-highlight);
+  transform: translateY(-1px);
+}
 .rule-item.disabled { opacity: 0.55; }
 .rule-item.dragging { opacity: 0.4; }
-.rule-item.drag-over { box-shadow: 0 -2px 0 0 var(--color-primary) inset, 0 0 0 1px var(--color-primary); }
+.rule-item.drag-over { box-shadow: 0 -2px 0 0 var(--color-primary) inset, 0 0 0 1px var(--color-primary); transform: none; }
 .drag-handle {
   color: var(--color-text-muted); cursor: grab; flex-shrink: 0;
   opacity: 0.5; transition: opacity 0.12s;
@@ -651,19 +669,17 @@ onMounted(() => {
 .rule-header {
   display: flex; align-items: center; gap: 10px;
   padding: 12px 14px; cursor: pointer;
-  transition: background 0.1s;
+  transition: background 0.15s ease-out;
 }
-.rule-header:hover { background: rgba(128,128,128,0.04); }
+.rule-header:hover { background: var(--color-neutral-soft); }
 .rule-order {
   width: 22px; height: 22px; border-radius: 50%;
-  background: rgba(128,128,128,0.12);
+  background: var(--color-neutral-strong);
   display: flex; align-items: center; justify-content: center;
   font-size: 11px; font-weight: 700; color: var(--color-text-muted);
   flex-shrink: 0;
 }
-.toggle-btn { background: none; border: none; cursor: pointer; padding: 2px; display: flex; }
-.toggle-on { color: var(--color-primary); }
-.toggle-off { color: var(--color-text-muted); }
+.toggle-cell { display: flex; align-items: center; flex-shrink: 0; }
 .rule-info { flex: 1; min-width: 0; }
 .rule-name { font-size: 13px; font-weight: 600; }
 .rule-summary { font-size: 11px; color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
@@ -672,16 +688,16 @@ onMounted(() => {
   width: 28px; height: 28px; border: none; background: transparent;
   border-radius: var(--radius-sm); cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  color: var(--color-text-muted); transition: all 0.1s;
+  color: var(--color-text-muted); transition: all 0.15s ease-out;
 }
 .icon-btn:hover { background: var(--color-neutral); color: var(--color-text); }
-.icon-btn.danger:hover { background: rgba(209,52,56,0.1); color: var(--color-error); }
+.icon-btn.danger:hover { background: var(--color-error-soft); color: var(--color-error); }
 
 /* Expanded detail */
 .rule-detail {
   padding: 10px 14px 14px;
   border-top: 1px solid var(--color-border);
-  background: rgba(128,128,128,0.03);
+  background: var(--color-neutral-soft);
 }
 .detail-grid { display: grid; grid-template-columns: 120px 1fr; gap: 6px 12px; font-size: 12px; }
 .detail-key {
@@ -694,16 +710,28 @@ onMounted(() => {
 
 /* Add Dialog */
 .dialog-overlay {
-  position: fixed; inset: 0; z-index: 100;
-  background: rgba(0,0,0,0.3);
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  background: rgba(0,0,0,0.5);
   display: flex; align-items: center; justify-content: center;
   padding: 24px;
   backdrop-filter: blur(4px);
+  animation: overlayIn 0.2s ease-out;
 }
 .dialog {
   width: 100%; max-width: 640px; max-height: 80vh; overflow-y: auto;
   padding: 24px;
   display: flex; flex-direction: column; gap: 16px;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg), var(--edge-highlight);
+  animation: dialogIn 0.22s ease-out;
+}
+@keyframes overlayIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes dialogIn {
+  from { opacity: 0; transform: scale(0.97) translateY(6px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
 }
 .dialog-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; }
 .dialog-form { display: flex; flex-direction: column; gap: 10px; }
@@ -716,7 +744,10 @@ onMounted(() => {
 .form-row { display: flex; gap: 12px; }
 .form-group { display: flex; flex-direction: column; gap: 5px; }
 .form-group.half { flex: 1; }
-.form-label { font-size: 11px; font-weight: 500; color: var(--color-text-secondary); }
+.form-label {
+  font-size: 11px; font-weight: 600; color: var(--color-text-secondary);
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
 .textarea-sm { min-height: 60px; resize: vertical; }
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; padding-top: 4px; }
 
@@ -734,8 +765,10 @@ onMounted(() => {
 .provider-item {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 10px; border: 1px solid var(--color-border);
-  border-radius: var(--radius-md); background: rgba(128,128,128,0.03);
+  border-radius: var(--radius-md); background: var(--color-neutral-soft);
+  transition: border-color 0.15s ease-out, background 0.15s ease-out;
 }
+.provider-item:hover { border-color: var(--color-neutral-strong); background: var(--color-neutral); }
 .provider-item.disabled { opacity: 0.5; }
 .provider-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .provider-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
@@ -750,8 +783,8 @@ onMounted(() => {
 .provider-badge.preset-direct { background: var(--color-success-soft); color: var(--color-success); }
 .provider-badge.preset-block { background: var(--color-error-soft); color: var(--color-error); }
 .provider-fmt {
-  font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 4px;
-  background: rgba(128,128,128,0.12); color: var(--color-text-secondary);
+  font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: var(--radius-sm);
+  background: var(--color-neutral-strong); color: var(--color-text-secondary);
 }
 
 .add-dialog { padding: 20px; display: flex; flex-direction: column; gap: 14px; margin-bottom: 4px; }

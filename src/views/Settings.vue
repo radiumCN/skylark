@@ -11,13 +11,17 @@ import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { useI18n } from "vue-i18n";
 import { useAppStore, type AppConfig } from "../stores/app";
+import { useFeedbackStore } from "../stores/feedback";
 import { setLocale } from "../i18n";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { formatBytes } from "../utils/format";
 import { useTemporaryFlag } from "../composables/useTemporaryFlag";
+import ToggleSwitch from "../components/ToggleSwitch.vue";
+import Select from "../components/Select.vue";
 
 const store = useAppStore();
+const fb = useFeedbackStore();
 const { t } = useI18n();
 
 // Render release notes (GitHub release bodies) as Markdown. The source is remote, so the
@@ -88,7 +92,7 @@ async function saveCurrentProfile() {
     newProfileName.value = "";
     await refreshProfiles();
   } catch (e) {
-    alert(String(e));
+    fb.toastError(String(e));
   } finally {
     profileBusy.value = false;
   }
@@ -98,21 +102,72 @@ async function switchProfile(name: string) {
   try {
     await store.loadProfile(name);
     localConfig.value = { ...store.config };
-    alert(t("settings.profileSwitched", { name }));
+    fb.toastSuccess(t("settings.profileSwitched", { name }));
   } catch (e) {
-    alert(String(e));
+    fb.toastError(String(e));
   } finally {
     profileBusy.value = false;
   }
 }
 async function removeProfile(name: string) {
-  if (!confirm(t("settings.confirmDeleteProfile", { name }))) return;
+  if (!(await fb.confirm({ message: t("settings.confirmDeleteProfile", { name }), danger: true }))) return;
   await store.deleteProfile(name);
   await refreshProfiles();
 }
 const { flag: saved, trigger: triggerSaved } = useTemporaryFlag(1500);
 const appVersion = ref("");
 const localConfig = ref<AppConfig>({ ...store.config });
+
+// ─── Section jump nav (additive only — no existing state/handler touched) ──
+// One entry per section, in DOM order. Titles reuse the existing i18n keys so
+// the chip bar stays localized.
+const sections = [
+  { id: "sec-update", key: "settings.appUpdate" },
+  { id: "sec-kernel", key: "settings.kernelManagement" },
+  { id: "sec-system", key: "settings.systemBehavior" },
+  { id: "sec-ports", key: "settings.portConfig" },
+  { id: "sec-subscription", key: "settings.subscription" },
+  { id: "sec-dns", key: "settings.dnsAndNetwork" },
+  { id: "sec-diagnostics", key: "settings.diagnostics" },
+  { id: "sec-profiles", key: "settings.profiles" },
+  { id: "sec-backup", key: "settings.configBackup" },
+  { id: "sec-tun", key: "settings.tunMode" },
+  { id: "sec-autoselect", key: "settings.autoSelect" },
+  { id: "sec-advanced", key: "settings.advancedSettings" },
+] as const;
+const activeSection = ref<string>(sections[0].id);
+let sectionObserver: IntersectionObserver | null = null;
+
+// Click-to-scroll; sections carry scroll-margin-top so they clear the sticky bar.
+function scrollToSection(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// Scroll-spy: highlight the top-most section currently sitting just below the
+// sticky chip bar. Additive lifecycle hooks keep this isolated from the existing
+// onMounted/onUnmounted logic.
+onMounted(() => {
+  sectionObserver = new IntersectionObserver(
+    (entries) => {
+      const visible = entries
+        .filter((e) => e.isIntersecting)
+        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      if (visible.length > 0) {
+        activeSection.value = (visible[0].target as HTMLElement).id;
+      }
+    },
+    { rootMargin: "-72px 0px -55% 0px", threshold: 0 }
+  );
+  for (const s of sections) {
+    const el = document.getElementById(s.id);
+    if (el) sectionObserver.observe(el);
+  }
+});
+
+onUnmounted(() => {
+  sectionObserver?.disconnect();
+  sectionObserver = null;
+});
 
 // Platform detection (WinTun is a Windows-only requirement).
 const isWindows = /win/i.test(navigator.userAgent);
@@ -148,9 +203,9 @@ async function exportConfig() {
     } catch {
       /** Reveal may be unavailable; the file is still written. */
     }
-    alert(t('settings.exportedTo', { path }));
+    fb.toastSuccess(t('settings.exportedTo', { path }));
   } catch (e) {
-    alert(t('settings.exportFailed', { e }));
+    fb.toastError(t('settings.exportFailed', { e }));
   } finally {
     exportingConfig.value = false;
   }
@@ -160,10 +215,10 @@ async function exportConfig() {
 async function importConfig() {
   const content = importText.value.trim();
   if (!content) {
-    alert(t('settings.pasteBackupContent'));
+    fb.toastInfo(t('settings.pasteBackupContent'));
     return;
   }
-  if (!confirm(t('settings.importConfirm'))) return;
+  if (!(await fb.confirm({ message: t('settings.importConfirm'), danger: true }))) return;
   importingConfig.value = true;
   try {
     await invoke("cmd_import_config", { content });
@@ -176,9 +231,9 @@ async function importConfig() {
     ]);
     showImportModal.value = false;
     importText.value = "";
-    alert(t('settings.importSuccess'));
+    fb.toastSuccess(t('settings.importSuccess'));
   } catch (e) {
-    alert(t('settings.importFailed', { e }));
+    fb.toastError(t('settings.importFailed', { e }));
   } finally {
     importingConfig.value = false;
   }
@@ -499,15 +554,31 @@ onUnmounted(() => {
   <div class="page">
     <div class="page-header">
       <h1 class="page-title">{{ t('settings.title') }}</h1>
-      <Transition name="autosave">
-        <span v-if="saved" class="autosave-badge">
-          <Check :size="12" />{{ t('settings.saved') }}
-        </span>
-      </Transition>
+      <div class="header-actions">
+        <Transition name="autosave">
+          <span v-if="saved" class="autosave-badge">
+            <Check :size="12" />{{ t('settings.saved') }}
+          </span>
+        </Transition>
+      </div>
     </div>
 
+    <!-- Sticky section-jump nav (additive) -->
+    <nav class="section-nav" :aria-label="t('settings.title')">
+      <button
+        v-for="s in sections"
+        :key="s.id"
+        type="button"
+        class="section-chip"
+        :class="{ active: activeSection === s.id }"
+        @click="scrollToSection(s.id)"
+      >
+        {{ t(s.key) }}
+      </button>
+    </nav>
+
     <!-- ─── 应用更新 ─── -->
-    <section class="settings-section">
+    <section id="sec-update" class="settings-section">
       <div class="section-header">
         <Rocket :size="15" />
         <span>{{ t('settings.appUpdate') }}</span>
@@ -522,10 +593,14 @@ onUnmounted(() => {
           </div>
           <div class="channel-select-wrap">
             <span class="channel-label">{{ t('settings.updateChannel') }}</span>
-            <select class="input select-input" v-model="localConfig.update_channel" style="width:110px">
-              <option value="stable">{{ t('settings.channelStable') }}</option>
-              <option value="beta">{{ t('settings.channelBeta') }}</option>
-            </select>
+            <Select
+              v-model="localConfig.update_channel"
+              :options="[
+                { value: 'stable', label: t('settings.channelStable') },
+                { value: 'beta', label: t('settings.channelBeta') },
+              ]"
+              style="width:110px"
+            />
           </div>
         </div>
 
@@ -608,7 +683,7 @@ onUnmounted(() => {
     </section>
 
     <!-- ─── sing-box 内核管理 ─── -->
-    <section class="settings-section">
+    <section id="sec-kernel" class="settings-section">
       <div class="section-header">
         <Package :size="15" />
         <span>{{ t('settings.kernelManagement') }}</span>
@@ -715,7 +790,7 @@ onUnmounted(() => {
     </section>
 
     <!-- System Behavior -->
-    <section class="settings-section">
+    <section id="sec-system" class="settings-section">
       <div class="section-header">
         <Monitor :size="15" />
         <span>{{ t('settings.systemBehavior') }}</span>
@@ -726,10 +801,7 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.startupWithSystem') }}</div>
             <div class="setting-desc">{{ t('settings.startupWithSystemDesc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.startup_with_system" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.startup_with_system" :aria-label="t('settings.startupWithSystem')" />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -737,10 +809,7 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.startupMinimized') }}</div>
             <div class="setting-desc">{{ t('settings.startupMinimizedDesc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.startup_minimized" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.startup_minimized" :aria-label="t('settings.startupMinimized')" />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -748,10 +817,7 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.allowLan') }}</div>
             <div class="setting-desc">{{ t('settings.allowLanDesc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.allow_lan" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.allow_lan" :aria-label="t('settings.allowLan')" />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -761,10 +827,7 @@ onUnmounted(() => {
               {{ localConfig.close_to_tray ? t('settings.closeToTrayDesc') : t('settings.closeToExitDesc') }}
             </div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.close_to_tray" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.close_to_tray" :aria-label="t('settings.closeButtonBehavior')" />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -772,10 +835,7 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.rememberProxyState') }}</div>
             <div class="setting-desc">{{ t('settings.rememberProxyStateDesc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.restore_proxy_on_startup" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.restore_proxy_on_startup" :aria-label="t('settings.rememberProxyState')" />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -783,10 +843,7 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.logToFile') }}</div>
             <div class="setting-desc">{{ t('settings.logToFileDesc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.log_to_file" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.log_to_file" :aria-label="t('settings.logToFile')" />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -807,7 +864,7 @@ onUnmounted(() => {
     </section>
 
     <!-- Ports -->
-    <section class="settings-section">
+    <section id="sec-ports" class="settings-section">
       <div class="section-header">
         <Globe :size="15" />
         <span>{{ t('settings.portConfig') }}</span>
@@ -849,7 +906,7 @@ onUnmounted(() => {
 
     <!-- DNS / 网络 -->
     <!-- Subscription -->
-    <section class="settings-section">
+    <section id="sec-subscription" class="settings-section">
       <div class="section-header">
         <RefreshCw :size="15" />
         <span>{{ t('settings.subscription') }}</span>
@@ -874,7 +931,7 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <section class="settings-section">
+    <section id="sec-dns" class="settings-section">
       <div class="section-header">
         <Globe :size="15" />
         <span>{{ t('settings.dnsAndNetwork') }}</span>
@@ -893,16 +950,13 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.enableIpv6') }}</div>
             <div class="setting-desc">{{ t('settings.enableIpv6Desc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.enable_ipv6" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.enable_ipv6" :aria-label="t('settings.enableIpv6')" />
         </div>
       </div>
     </section>
 
     <!-- Network diagnostics (N5) -->
-    <section class="settings-section">
+    <section id="sec-diagnostics" class="settings-section">
       <div class="section-header">
         <Zap :size="15" />
         <span>{{ t('settings.diagnostics') }}</span>
@@ -952,7 +1006,7 @@ onUnmounted(() => {
     </section>
 
     <!-- Config profiles (N6) -->
-    <section class="settings-section">
+    <section id="sec-profiles" class="settings-section">
       <div class="section-header">
         <Layers :size="15" />
         <span>{{ t('settings.profiles') }}</span>
@@ -994,7 +1048,7 @@ onUnmounted(() => {
     </section>
 
     <!-- Config backup / restore -->
-    <section class="settings-section">
+    <section id="sec-backup" class="settings-section">
       <div class="section-header">
         <Archive :size="15" />
         <span>{{ t('settings.configBackup') }}</span>
@@ -1025,7 +1079,7 @@ onUnmounted(() => {
     </section>
 
     <!-- TUN Mode -->
-    <section class="settings-section">
+    <section id="sec-tun" class="settings-section">
       <div class="section-header">
         <Shield :size="15" />
         <span>{{ t('settings.tunMode') }}</span>
@@ -1123,7 +1177,7 @@ onUnmounted(() => {
     </section>
 
     <!-- Auto-select (URLTest) -->
-    <section class="settings-section">
+    <section id="sec-autoselect" class="settings-section">
       <div class="section-header">
         <Zap :size="15" />
         <span>{{ t('settings.autoSelect') }}</span>
@@ -1175,7 +1229,7 @@ onUnmounted(() => {
     </section>
 
     <!-- Advanced -->
-    <section class="settings-section">
+    <section id="sec-advanced" class="settings-section">
       <div class="section-header">
         <Cpu :size="15" />
         <span>{{ t('settings.advancedSettings') }}</span>
@@ -1186,13 +1240,16 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.logLevel') }}</div>
             <div class="setting-desc">{{ t('settings.logLevelDesc') }}</div>
           </div>
-          <select class="input select-input" v-model="localConfig.log_level">
-            <option value="trace">{{ t('settings.logLevelTrace') }}</option>
-            <option value="debug">Debug</option>
-            <option value="info">{{ t('settings.logLevelInfo') }}</option>
-            <option value="warn">Warn</option>
-            <option value="error">{{ t('settings.logLevelError') }}</option>
-          </select>
+          <Select
+            v-model="localConfig.log_level"
+            :options="[
+              { value: 'trace', label: t('settings.logLevelTrace') },
+              { value: 'debug', label: 'Debug' },
+              { value: 'info', label: t('settings.logLevelInfo') },
+              { value: 'warn', label: 'Warn' },
+              { value: 'error', label: t('settings.logLevelError') },
+            ]"
+          />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -1200,11 +1257,14 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.theme') }}</div>
             <div class="setting-desc">{{ t('settings.themeDesc') }}</div>
           </div>
-          <select class="input select-input" v-model="localConfig.theme">
-            <option value="system">{{ t('settings.themeSystem') }}</option>
-            <option value="light">{{ t('settings.themeLight') }}</option>
-            <option value="dark">{{ t('settings.themeDark') }}</option>
-          </select>
+          <Select
+            v-model="localConfig.theme"
+            :options="[
+              { value: 'system', label: t('settings.themeSystem') },
+              { value: 'light', label: t('settings.themeLight') },
+              { value: 'dark', label: t('settings.themeDark') },
+            ]"
+          />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -1212,14 +1272,14 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.language') }}</div>
             <div class="setting-desc">{{ t('settings.languageDesc') }}</div>
           </div>
-          <select
-            class="input select-input"
+          <Select
             v-model="localConfig.language"
-            @change="onLanguageChange"
-          >
-            <option value="zh-CN">{{ t('settings.languageZh') }}</option>
-            <option value="en">{{ t('settings.languageEn') }}</option>
-          </select>
+            :options="[
+              { value: 'zh-CN', label: t('settings.languageZh') },
+              { value: 'en', label: t('settings.languageEn') },
+            ]"
+            @update:model-value="onLanguageChange"
+          />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -1227,10 +1287,7 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.autoCheckKernelUpdate') }}</div>
             <div class="setting-desc">{{ t('settings.autoCheckKernelUpdateDesc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.auto_update_notify" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.auto_update_notify" :aria-label="t('settings.autoCheckKernelUpdate')" />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -1310,43 +1367,86 @@ onUnmounted(() => {
 .profile-list { display: flex; flex-direction: column; gap: 6px; padding: 2px 18px 14px; }
 .profile-item {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 7px 10px; border-radius: 8px; background: rgba(128,128,128,0.06);
+  padding: 7px 10px; border-radius: var(--radius-md);
+  background: var(--color-neutral-soft);
+  border: 1px solid var(--color-border);
+  transition: background 0.2s ease-out, border-color 0.2s ease-out;
 }
+.profile-item:hover { background: var(--color-neutral); border-color: var(--color-primary-soft); }
 .profile-name { font-size: 13px; font-weight: 500; }
 .profile-actions { display: flex; gap: 6px; }
 .btn-sm { padding: 3px 10px; font-size: 12px; }
 .btn-sm.danger { color: var(--color-error); }
 
-.page { display: flex; flex-direction: column; gap: 20px; max-width: 700px; }
-.page-header { display: flex; align-items: center; justify-content: space-between; }
-.page-title { font-size: 20px; font-weight: 600; }
+/* Sticky section-jump nav pinned to the app-content scroll region so sections
+   scroll underneath it. Full-bleed over the shell's 24px side padding so it reads
+   as a pinned header band (not a floating card), with an OPAQUE bg and no
+   backdrop blur — blurring the moving content underneath is what produced the
+   on-scroll ghosting / see-through artifact. */
+.section-nav {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  margin: 0 -24px;
+  padding: 10px 24px;
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+  scrollbar-width: none;
+}
+.section-nav::-webkit-scrollbar { display: none; }
+.section-chip {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border-radius: 100px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+.section-chip:hover { background: var(--color-neutral-soft); color: var(--color-text); }
+.section-chip.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 2px 8px var(--color-primary-glow);
+}
 
 .autosave-badge {
   display: inline-flex; align-items: center; gap: 5px;
   font-size: 12px; font-weight: 500;
   color: var(--color-success); padding: 4px 10px;
-  background: rgba(16,124,16,0.08);
+  background: var(--color-success-soft);
+  border: 1px solid var(--color-border);
   border-radius: 100px;
 }
 .autosave-enter-active, .autosave-leave-active { transition: opacity 0.3s, transform 0.3s; }
 .autosave-enter-from, .autosave-leave-to { opacity: 0; transform: translateY(-4px); }
 
-.settings-section { display: flex; flex-direction: column; gap: 10px; }
+.settings-section { display: flex; flex-direction: column; gap: 10px; scroll-margin-top: 60px; }
 .section-header {
   display: flex; align-items: center; gap: 7px;
-  font-size: 12px; font-weight: 600; color: var(--color-text-secondary);
+  font-size: 11px; font-weight: 600; color: var(--color-text-secondary);
   text-transform: uppercase; letter-spacing: 0.5px; padding: 0 4px;
 }
 .settings-card { padding: 0; overflow: hidden; }
 .setting-row {
   display: flex; align-items: center; justify-content: space-between;
   gap: 16px; padding: 14px 18px;
+  transition: background 0.2s ease-out;
 }
+.setting-row:hover { background: var(--color-neutral-soft); }
 .setting-info { flex: 1; }
-.setting-label { font-size: 13px; font-weight: 500; margin-bottom: 2px; }
-.setting-desc { font-size: 11px; color: var(--color-text-muted); }
+.setting-label { font-size: 13px; font-weight: 500; color: var(--color-text); margin-bottom: 2px; }
+.setting-desc { font-size: 11px; color: var(--color-text-muted); line-height: 1.45; }
 .not-installed { color: var(--color-error); }
-.version-unknown { color: var(--color-text-muted, #888); font-style: italic; }
+.version-unknown { color: var(--color-text-muted); font-style: italic; }
 .setting-divider { height: 1px; background: var(--color-border); margin: 0 18px; }
 
 /* Toggle Switch */
@@ -1354,21 +1454,24 @@ onUnmounted(() => {
 .toggle input { opacity: 0; width: 0; height: 0; }
 .toggle-track {
   position: absolute; inset: 0;
-  background: rgba(128,128,128,0.3); border-radius: 12px;
-  cursor: pointer; transition: background 0.2s;
+  background: var(--color-neutral-strong); border-radius: 12px;
+  cursor: pointer; transition: background 0.2s ease-out, box-shadow 0.2s ease-out;
 }
 .toggle-track::before {
   content: '';
   position: absolute; left: 3px; top: 3px;
   width: 18px; height: 18px; border-radius: 50%;
-  background: white; transition: transform 0.2s;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  background: white; transition: transform 0.2s ease-out;
+  box-shadow: var(--shadow-sm);
 }
-.toggle input:checked + .toggle-track { background: var(--color-primary); }
+.toggle input:checked + .toggle-track {
+  background: var(--color-primary);
+  box-shadow: 0 2px 8px var(--color-primary-glow);
+}
 .toggle input:checked + .toggle-track::before { transform: translateX(18px); }
+.toggle input:focus-visible + .toggle-track { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 
 .port-input { width: 100px; text-align: right; }
-.select-input { width: 160px; cursor: pointer; }
 
 /* ─── Kernel Card ─── */
 .kernel-card {}
@@ -1376,7 +1479,7 @@ onUnmounted(() => {
 
 .release-info {
   padding: 10px 18px 12px;
-  background: rgba(79, 110, 247, 0.04);
+  background: var(--color-primary-soft);
   border-top: 1px solid var(--color-border);
   border-bottom: 1px solid var(--color-border);
 }
@@ -1408,12 +1511,12 @@ onUnmounted(() => {
 .release-notes.markdown-body strong { color: var(--color-text-primary); font-weight: 600; }
 .release-notes.markdown-body code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px; padding: 1px 4px; border-radius: 4px;
-  background: var(--color-bg-tertiary, rgba(127, 127, 127, 0.15));
+  font-size: 10px; padding: 1px 4px; border-radius: var(--radius-sm);
+  background: var(--color-neutral-strong);
 }
 .release-notes.markdown-body pre {
-  margin: 6px 0; padding: 8px; border-radius: 6px; overflow-x: auto;
-  background: var(--color-bg-tertiary, rgba(127, 127, 127, 0.15));
+  margin: 6px 0; padding: 8px; border-radius: var(--radius-sm); overflow-x: auto;
+  background: var(--color-neutral-strong);
 }
 .release-notes.markdown-body pre code { padding: 0; background: none; }
 .release-notes.markdown-body :where(h1, h2) { border: none; padding: 0; }
@@ -1432,22 +1535,23 @@ onUnmounted(() => {
 }
 .progress-bytes { font-family: 'Cascadia Code', monospace; font-size: 11px; }
 .progress-bar-track {
-  height: 6px; background: var(--color-neutral-strong);
-  border-radius: 3px; overflow: hidden;
+  height: 6px; background: var(--color-neutral);
+  border-radius: var(--radius-sm); overflow: hidden;
 }
 .progress-bar-fill {
   height: 100%; background: var(--color-primary);
-  border-radius: 3px;
-  transition: width 0.3s ease;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 8px var(--color-primary-glow);
+  transition: width 0.3s ease-out;
 }
-.progress-bar-fill.done { background: var(--color-success); }
+.progress-bar-fill.done { background: var(--color-success); box-shadow: 0 0 8px var(--color-success-glow); }
 
 .kernel-error {
   display: flex; align-items: flex-start; gap: 6px;
   margin: 0 18px 12px;
   padding: 10px 12px;
-  background: rgba(209,52,56,0.06);
-  border: 1px solid rgba(209,52,56,0.2);
+  background: var(--color-error-soft);
+  border: 1px solid var(--color-error-soft);
   border-radius: var(--radius-md);
   font-size: 12px; color: var(--color-error); line-height: 1.4;
 }
@@ -1457,8 +1561,8 @@ onUnmounted(() => {
 }
 .kernel-hint code {
   font-family: 'Cascadia Code', monospace;
-  background: var(--color-neutral);
-  padding: 1px 4px; border-radius: 3px;
+  background: var(--color-neutral-strong);
+  padding: 1px 4px; border-radius: var(--radius-sm);
 }
 
 .badge-purple {
@@ -1478,7 +1582,7 @@ onUnmounted(() => {
   padding: 12px 18px 14px;
   border-top: 1px solid var(--color-border);
   display: flex; flex-direction: column; gap: 0;
-  background: rgba(0,0,0,0.02);
+  background: var(--color-neutral-soft);
 }
 .tun-check-row {
   display: flex; align-items: center; gap: 10px; padding: 8px 0;
@@ -1495,30 +1599,43 @@ onUnmounted(() => {
 .btn-sm { padding: 4px 10px !important; font-size: 12px !important; flex-shrink: 0; }
 .tun-error {
   font-size: 11px; color: var(--color-error);
-  padding: 6px 8px; background: rgba(209,52,56,0.06);
+  padding: 6px 8px; background: var(--color-error-soft);
+  border: 1px solid var(--color-error-soft);
   border-radius: var(--radius-sm); margin-top: 4px;
 }
 
 .about-card { padding: 20px; display: flex; align-items: center; gap: 16px; }
-.about-name { font-size: 15px; font-weight: 600; margin-bottom: 3px; }
-.about-desc { font-size: 12px; color: var(--color-text-secondary); margin-bottom: 3px; }
-.about-version { font-size: 11px; color: var(--color-text-muted); }
+.about-name { font-size: 15px; font-weight: 600; color: var(--color-text); margin-bottom: 3px; }
+.about-desc { font-size: 12px; color: var(--color-text-muted); margin-bottom: 6px; }
+.about-version {
+  display: inline-flex; align-items: center;
+  font-size: 11px; color: var(--color-text-secondary);
+  font-family: 'Cascadia Code', monospace;
+  padding: 2px 8px; border-radius: 100px;
+  background: var(--color-neutral-strong);
+}
 
 /* Import config dialog */
 .dialog-overlay {
-  position: fixed; inset: 0; z-index: 50;
+  position: fixed; inset: 0; z-index: var(--z-modal);
   display: flex; align-items: center; justify-content: center;
   background: rgba(0,0,0,0.4); backdrop-filter: blur(4px);
 }
 .dialog-card {
   width: min(560px, 92vw);
-  background: var(--color-bg); border: 1px solid var(--color-border);
-  border-radius: var(--radius-md, 10px); padding: 20px;
+  background: var(--color-surface-strong); border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg); padding: 20px;
   display: flex; flex-direction: column; gap: 12px;
-  box-shadow: 0 16px 48px rgba(0,0,0,0.28);
+  box-shadow: var(--shadow-lg), var(--edge-highlight);
 }
 .dialog-title { font-size: 15px; font-weight: 600; }
 .dialog-hint { font-size: 12px; color: var(--color-text-secondary); line-height: 1.5; }
 .import-area { width: 100%; resize: vertical; font-family: var(--font-mono, monospace); font-size: 12px; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .setting-row, .profile-item,
+  .toggle-track, .toggle-track::before,
+  .progress-bar-fill { transition: none; }
+}
 </style>

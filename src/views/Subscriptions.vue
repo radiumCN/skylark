@@ -6,13 +6,18 @@ import {
 import QRCode from "qrcode";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
+import { useFeedbackStore } from "../stores/feedback";
 import { formatBytes } from "../utils/format";
 import { copyToClipboard, readFromClipboard } from "../utils/clipboard";
 import { useTemporaryFlag } from "../composables/useTemporaryFlag";
 import EmptyState from "../components/EmptyState.vue";
+import Skeleton from "../components/Skeleton.vue";
+import ToggleSwitch from "../components/ToggleSwitch.vue";
+import Select from "../components/Select.vue";
 
 const { t } = useI18n();
 const store = useAppStore();
+const fb = useFeedbackStore();
 
 onMounted(() => {
   // Shared poller keeps the active auto group's current node fresh for the badge below.
@@ -141,7 +146,7 @@ async function updateSub(id: string) {
 }
 
 async function deleteSub(id: string, name: string) {
-  if (confirm(t("subscriptions.confirmDelete", { name }))) {
+  if (await fb.confirm({ message: t("subscriptions.confirmDelete", { name }), danger: true })) {
     await store.deleteSubscription(id);
   }
 }
@@ -284,7 +289,7 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
   <div class="page">
     <div class="page-header">
       <h1 class="page-title">{{ t("subscriptions.title") }}</h1>
-      <div style="display:flex;gap:8px;">
+      <div class="header-actions">
         <button
           v-if="store.subscriptions.length > 0"
           class="btn btn-ghost"
@@ -301,9 +306,23 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
       </div>
     </div>
 
+    <!-- Cold-start skeleton (before the first data load resolves) -->
+    <div
+      v-if="store.subscriptions.length === 0 && !showAddDialog && !store.initialized"
+      class="sub-skel-list"
+    >
+      <div v-for="i in 3" :key="i" class="card sub-skel">
+        <div class="sub-skel-main">
+          <Skeleton width="38%" height="14px" />
+          <Skeleton width="62%" height="10px" />
+        </div>
+        <Skeleton width="72px" height="24px" radius="var(--radius-md)" />
+      </div>
+    </div>
+
     <!-- Empty State -->
     <EmptyState
-      v-if="store.subscriptions.length === 0 && !showAddDialog"
+      v-else-if="store.subscriptions.length === 0 && !showAddDialog"
       :icon="Server"
       :title="t('subscriptions.empty')"
       :desc="t('subscriptions.emptyDesc')"
@@ -317,11 +336,11 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
     <!-- Add Dialog (inline) -->
     <div v-if="showAddDialog" class="card add-dialog">
       <div class="dialog-title">{{ t("subscriptions.add") }}</div>
-      <div class="mode-tabs">
-        <button class="mode-tab" :class="{ active: addMode === 'url' }" @click="addMode = 'url'">
+      <div class="segmented mode-tabs">
+        <button class="segmented__item" :class="{ active: addMode === 'url' }" @click="addMode = 'url'">
           {{ t("subscriptions.modeUrl") }}
         </button>
-        <button class="mode-tab" :class="{ active: addMode === 'text' }" @click="addMode = 'text'">
+        <button class="segmented__item" :class="{ active: addMode === 'text' }" @click="addMode = 'text'">
           {{ t("subscriptions.modeText") }}
         </button>
       </div>
@@ -482,24 +501,18 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
             </span>
           </div>
           <div class="autoupdate-right">
-            <select
+            <Select
               v-if="sub.auto_update"
               class="interval-select"
-              :value="sub.update_interval"
-              @change="changeInterval(sub.id, sub.auto_update, Number(($event.target as HTMLSelectElement).value))"
-            >
-              <option v-for="opt in INTERVAL_OPTIONS" :key="opt.value" :value="opt.value">
-                {{ opt.label }}
-              </option>
-            </select>
-            <button
-              class="mini-toggle"
-              :class="{ on: sub.auto_update }"
-              :title="sub.auto_update ? t('subscriptions.autoUpdateOff') : t('subscriptions.autoUpdateOn')"
-              @click="toggleAutoUpdate(sub.id, sub.auto_update, sub.update_interval)"
-            >
-              <span class="mini-knob" />
-            </button>
+              :model-value="sub.update_interval"
+              :options="INTERVAL_OPTIONS"
+              @update:model-value="changeInterval(sub.id, sub.auto_update, Number($event))"
+            />
+            <ToggleSwitch
+              :model-value="sub.auto_update"
+              :aria-label="sub.auto_update ? t('subscriptions.autoUpdateOff') : t('subscriptions.autoUpdateOn')"
+              @update:model-value="toggleAutoUpdate(sub.id, sub.auto_update, sub.update_interval)"
+            />
           </div>
         </div>
       </div>
@@ -608,10 +621,6 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 </template>
 
 <style scoped>
-.page { display: flex; flex-direction: column; gap: 16px; max-width: 800px; }
-.page-header { display: flex; align-items: center; justify-content: space-between; }
-.page-title { font-size: 20px; font-weight: 600; }
-
 .add-dialog { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
 .dialog-title { font-size: 15px; font-weight: 600; }
 .form-group { display: flex; flex-direction: column; gap: 6px; }
@@ -623,19 +632,9 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
   font-family: 'Cascadia Code', monospace; font-size: 12px; line-height: 1.5;
 }
 
-.mode-tabs {
-  display: flex; gap: 4px; padding: 3px;
-  background: rgba(128,128,128,0.08); border-radius: var(--radius-md);
-}
-.mode-tab {
-  flex: 1; padding: 6px 12px; border: none; border-radius: var(--radius-sm);
-  background: transparent; color: var(--color-text-secondary);
-  font-size: 12px; font-weight: 500; cursor: pointer; transition: all 0.15s;
-}
-.mode-tab.active {
-  background: var(--color-surface); color: var(--color-text);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.08);
-}
+/* Stretch the shared segmented control to fill the dialog width. */
+.mode-tabs { display: flex; }
+.mode-tabs .segmented__item { flex: 1; justify-content: center; }
 .form-error {
   display: flex; align-items: center; gap: 6px;
   font-size: 12px; color: var(--color-error);
@@ -643,12 +642,26 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
 
 .sub-list { display: flex; flex-direction: column; gap: 10px; }
+.sub-skel-list { display: flex; flex-direction: column; gap: 10px; }
+.sub-skel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+.sub-skel-main { flex: 1; display: flex; flex-direction: column; gap: var(--space-2); }
 .sub-item {
   padding: 0;
   display: flex; flex-direction: column;
-  transition: box-shadow 0.15s; overflow: hidden;
+  border-radius: var(--radius-lg);
+  transition: box-shadow 0.15s ease-out, border-color 0.15s ease-out, transform 0.15s ease-out;
+  overflow: hidden;
 }
-.sub-item:hover { box-shadow: var(--shadow-md); }
+.sub-item:hover {
+  box-shadow: var(--shadow-md), var(--edge-highlight);
+  border-color: var(--color-primary-soft);
+  transform: translateY(-1px);
+}
 .sub-main {
   display: flex; align-items: flex-start; justify-content: space-between;
   gap: 12px; padding: 16px 18px;
@@ -662,15 +675,15 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 }
 .meta-item.auto-hit {
   color: var(--accent-amber); font-weight: 500;
-  background: rgba(193, 128, 30,0.12); padding: 1px 7px; border-radius: 10px;
+  background: var(--color-warning-soft); padding: 1px 7px; border-radius: 100px;
 }
 .sub-url {
   font-size: 11px; color: var(--color-text-muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 500px;
 }
 .sub-actions { display: flex; gap: 4px; flex-shrink: 0; }
-.icon-btn { padding: 6px !important; }
-.icon-btn.danger:hover { color: var(--color-error); }
+.icon-btn { padding: 6px !important; transition: color 0.15s ease-out, background 0.15s ease-out; }
+.icon-btn.danger:hover { color: var(--color-error); background: var(--color-error-soft); }
 
 /* Airport usage / quota */
 .sub-quota {
@@ -685,20 +698,20 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 .quota-text { font-weight: 500; }
 .quota-expire {
   font-size: 11px; color: var(--color-text-muted);
-  background: var(--color-neutral); padding: 1px 7px; border-radius: 10px;
+  background: var(--color-neutral); padding: 1px 7px; border-radius: 100px;
 }
 .quota-expire.expired { color: var(--color-error); background: var(--color-error-soft); font-weight: 600; }
 .quota-bar {
-  height: 5px; border-radius: 3px; overflow: hidden;
-  background: rgba(128,128,128,0.18);
+  height: 5px; border-radius: 100px; overflow: hidden;
+  background: var(--color-neutral-strong);
 }
-.quota-fill { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
+.quota-fill { height: 100%; border-radius: 100px; transition: width 0.3s ease-out; }
 
 /* Auto-update row */
 .sub-autoupdate {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 18px;
-  background: rgba(128,128,128,0.04);
+  background: var(--color-neutral-soft);
   border-top: 1px solid var(--color-border);
 }
 .autoupdate-left {
@@ -708,48 +721,39 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 .autoupdate-icon { color: var(--color-text-muted); flex-shrink: 0; }
 .autoupdate-label { font-weight: 500; }
 .autoupdate-next {
-  font-size: 11px; color: var(--color-text-muted);
-  background: var(--color-neutral); padding: 1px 7px; border-radius: 10px;
+  font-size: 11px; color: var(--color-primary);
+  background: var(--color-primary-soft); padding: 1px 7px; border-radius: 100px;
 }
 .autoupdate-right { display: flex; align-items: center; gap: 8px; }
 
 .interval-select {
   font-size: 12px; padding: 2px 6px; border-radius: var(--radius-sm);
-  border: 1px solid var(--color-border); background: var(--color-surface);
+  border: 1px solid var(--color-border); background: var(--color-surface-strong);
   color: var(--color-text); cursor: pointer; outline: none;
+  transition: border-color 0.15s ease-out, box-shadow 0.15s ease-out;
 }
-.interval-select:focus { border-color: var(--color-primary); }
-
-.mini-toggle {
-  width: 34px; height: 20px; border-radius: 10px;
-  background: rgba(128,128,128,0.3); border: none; cursor: pointer;
-  position: relative; transition: background 0.2s; padding: 0; flex-shrink: 0;
+.interval-select:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-soft);
 }
-.mini-toggle.on { background: var(--color-primary); }
-.mini-knob {
-  position: absolute; top: 2px; left: 2px;
-  width: 16px; height: 16px; border-radius: 50%;
-  background: white; transition: transform 0.2s; display: block;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.2);
-}
-.mini-toggle.on .mini-knob { transform: translateX(14px); }
 
 .hint-card { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
-.hint-title { font-size: 12px; font-weight: 600; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
+.hint-title { font-size: 11px; font-weight: 600; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
 .hint-list { display: flex; flex-direction: column; gap: 8px; }
 .hint-item { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--color-text-secondary); }
 
 /* ─── QR Code dialog ─── */
 .qr-overlay {
-  position: fixed; inset: 0; z-index: 1000;
-  background: rgba(0,0,0,0.45);
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center;
 }
 .qr-dialog {
-  background: var(--color-surface);
+  background: var(--color-surface-strong);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg), var(--edge-highlight);
   width: 320px;
   overflow: hidden;
 }
@@ -770,17 +774,17 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
   display: flex; align-items: center;
   transition: color 0.15s, background 0.15s;
 }
-.qr-close:hover { color: var(--color-text); background: rgba(128,128,128,0.12); }
+.qr-close:hover { color: var(--color-text); background: var(--color-neutral); }
 
 .qr-body {
   padding: 20px 24px 20px;
   display: flex; flex-direction: column; align-items: center; gap: 14px;
 }
 .qr-image-wrap {
-  background: #fff;
+  background: white;
   border-radius: var(--radius-md);
   padding: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  box-shadow: var(--shadow-md);
 }
 .qr-image { display: block; width: 200px; height: 200px; }
 .qr-placeholder {
@@ -793,7 +797,7 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 }
 .qr-url-row {
   display: flex; align-items: center; gap: 6px; width: 100%;
-  background: rgba(128,128,128,0.06); border: 1px solid var(--color-border);
+  background: var(--color-neutral-soft); border: 1px solid var(--color-border);
   border-radius: var(--radius-md); padding: 6px 8px 6px 10px;
 }
 .qr-url-text {
@@ -806,7 +810,7 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 .copy-ok { color: var(--color-success); }
 
 /* QR dialog enter/leave transition */
-.qr-fade-enter-active, .qr-fade-leave-active { transition: opacity 0.18s, transform 0.18s; }
+.qr-fade-enter-active, .qr-fade-leave-active { transition: opacity 0.22s ease-out, transform 0.22s ease-out; }
 .qr-fade-enter-from, .qr-fade-leave-to { opacity: 0; transform: scale(0.95); }
 
 /* Node filter UI */

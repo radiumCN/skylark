@@ -18,6 +18,9 @@ import { useAppStore, type TrafficDay } from "../stores/app";
 import { useI18n } from "vue-i18n";
 import { formatBytes } from "../utils/format";
 import { useDelayedRefresh } from "../composables/useDelayedRefresh";
+import StatTile from "../components/StatTile.vue";
+import EmptyState from "../components/EmptyState.vue";
+import Skeleton from "../components/Skeleton.vue";
 
 const { t } = useI18n();
 
@@ -51,14 +54,18 @@ const todayEntry = computed(() => {
   return history.value[history.value.length - 1];
 });
 
+// Skeleton only on the very first fetch (no data yet). Later refreshes keep the
+// existing numbers visible and use the refresh button's spinner instead.
+const initialLoading = computed(() => loading.value && history.value.length === 0);
+
 const chartData = computed(() => ({
   labels: shown.value.map((d) => shortDate(d.date)),
   datasets: [
     {
       label: t("stats.download"),
       data: shown.value.map((d) => d.download),
-      borderColor: "rgba(16, 124, 16, 1)",
-      backgroundColor: "rgba(16, 124, 16, 0.12)",
+      borderColor: "#0e8f5a",
+      backgroundColor: "rgba(14, 143, 90, 0.10)",
       borderWidth: 2,
       tension: 0.35,
       fill: true,
@@ -68,8 +75,8 @@ const chartData = computed(() => ({
     {
       label: t("stats.upload"),
       data: shown.value.map((d) => d.upload),
-      borderColor: "rgba(79, 110, 247, 1)",
-      backgroundColor: "rgba(79, 110, 247, 0.12)",
+      borderColor: "#5e6ad2",
+      backgroundColor: "rgba(94, 106, 210, 0.10)",
       borderWidth: 2,
       tension: 0.35,
       fill: true,
@@ -84,7 +91,7 @@ const chartOptions = computed(() => ({
   maintainAspectRatio: false,
   interaction: { mode: "index" as const, intersect: false },
   plugins: {
-    legend: { position: "top" as const, labels: { boxWidth: 12, font: { size: 11 } } },
+    legend: { position: "top" as const, labels: { color: "rgba(128,128,128,0.85)", boxWidth: 12, font: { size: 11 } } },
     tooltip: {
       callbacks: {
         label: (ctx: TooltipItem<"line">) =>
@@ -93,10 +100,15 @@ const chartOptions = computed(() => ({
     },
   },
   scales: {
-    x: { grid: { display: false }, ticks: { font: { size: 10 }, maxRotation: 0, autoSkip: true } },
+    x: {
+      grid: { display: false },
+      ticks: { color: "rgba(128,128,128,0.65)", font: { size: 10 }, maxRotation: 0, autoSkip: true },
+    },
     y: {
       beginAtZero: true,
+      grid: { color: "rgba(128,128,128,0.10)" },
       ticks: {
+        color: "rgba(128,128,128,0.65)",
         font: { size: 10 },
         callback: (v: number | string) => formatBytes(Number(v)),
       },
@@ -120,12 +132,12 @@ onMounted(load);
   <div class="page">
     <div class="page-header">
       <h1 class="page-title">{{ t('stats.title') }}</h1>
-      <div style="display:flex;gap:8px;align-items:center;">
-        <div class="range-tabs">
+      <div class="header-actions">
+        <div class="segmented">
           <button
             v-for="d in [7, 30, 90]"
             :key="d"
-            class="range-tab"
+            class="segmented__item"
             :class="{ active: rangeDays === d }"
             @click="rangeDays = d"
           >
@@ -139,78 +151,85 @@ onMounted(load);
       </div>
     </div>
 
-    <!-- Summary cards -->
-    <div class="summary-grid">
-      <div class="card summary-card">
-        <div class="summary-icon today"><Database :size="16" /></div>
-        <div class="summary-body">
-          <div class="summary-label">{{ t('stats.today') }}</div>
-          <div class="summary-value">
-            {{ formatBytes((todayEntry?.upload ?? 0) + (todayEntry?.download ?? 0)) }}
-          </div>
+    <!-- Summary cards (skeleton on first load) -->
+    <div v-if="initialLoading" class="summary-grid">
+      <div v-for="i in 4" :key="i" class="card skel-tile">
+        <Skeleton width="40px" height="40px" radius="var(--radius-lg)" />
+        <div class="skel-tile-body">
+          <Skeleton width="60%" height="10px" />
+          <Skeleton width="45%" height="18px" />
         </div>
       </div>
-      <div class="card summary-card">
-        <div class="summary-icon down"><ArrowDown :size="16" /></div>
-        <div class="summary-body">
-          <div class="summary-label">{{ t('stats.downloadRange', { n: rangeDays }) }}</div>
-          <div class="summary-value">{{ formatBytes(totalDownload) }}</div>
-        </div>
-      </div>
-      <div class="card summary-card">
-        <div class="summary-icon up"><ArrowUp :size="16" /></div>
-        <div class="summary-body">
-          <div class="summary-label">{{ t('stats.uploadRange', { n: rangeDays }) }}</div>
-          <div class="summary-value">{{ formatBytes(totalUpload) }}</div>
-        </div>
-      </div>
-      <div class="card summary-card">
-        <div class="summary-icon total"><Database :size="16" /></div>
-        <div class="summary-body">
-          <div class="summary-label">{{ t('stats.totalRange', { n: rangeDays }) }}</div>
-          <div class="summary-value">{{ formatBytes(totalAll) }}</div>
-        </div>
-      </div>
+    </div>
+    <div v-else class="summary-grid">
+      <StatTile
+        :icon="Database"
+        :label="t('stats.today')"
+        :value="formatBytes((todayEntry?.upload ?? 0) + (todayEntry?.download ?? 0))"
+        accent="violet"
+      />
+      <StatTile
+        :icon="ArrowDown"
+        :label="t('stats.downloadRange', { n: rangeDays })"
+        :value="formatBytes(totalDownload)"
+        accent="success"
+      />
+      <StatTile
+        :icon="ArrowUp"
+        :label="t('stats.uploadRange', { n: rangeDays })"
+        :value="formatBytes(totalUpload)"
+        accent="primary"
+      />
+      <StatTile
+        :icon="Database"
+        :label="t('stats.totalRange', { n: rangeDays })"
+        :value="formatBytes(totalAll)"
+        accent="teal"
+      />
     </div>
 
     <!-- Chart -->
     <div class="card chart-card">
       <div class="chart-title">{{ t('stats.dailyTraffic') }}</div>
-      <div v-if="shown.length > 0" class="chart-wrap">
+      <div v-if="initialLoading" class="chart-wrap">
+        <Skeleton width="100%" height="100%" radius="var(--radius-md)" />
+      </div>
+      <div v-else-if="shown.length > 0" class="chart-wrap">
         <Line :data="chartData" :options="chartOptions" />
       </div>
-      <div v-else class="empty-hint">
-        {{ t('stats.emptyHint') }}
-      </div>
+      <EmptyState v-else :icon="Database" :title="t('stats.emptyHint')" />
     </div>
   </div>
 </template>
 
 <style scoped>
-.range-tabs { display: flex; gap: 2px; background: var(--color-bg-secondary); border-radius: 8px; padding: 2px; }
-.range-tab {
-  border: none; background: transparent; cursor: pointer; font-size: 12px;
-  padding: 4px 10px; border-radius: 6px; color: var(--color-text-secondary);
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-3);
 }
-.range-tab.active { background: var(--color-bg); color: var(--color-text); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
-
-.summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 14px; }
-.summary-card { display: flex; align-items: center; gap: 12px; padding: 14px 16px; }
-.summary-icon {
-  width: 36px; height: 36px; border-radius: 9px; display: flex; align-items: center;
-  justify-content: center; color: #fff; flex-shrink: 0;
+.skel-tile {
+  padding: var(--space-4);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
 }
-.summary-icon.today { background: var(--accent-violet); }
-.summary-icon.down { background: var(--color-success); }
-.summary-icon.up { background: var(--color-primary); }
-.summary-icon.total { background: #6b6b6b; }
-.summary-label { font-size: 11.5px; color: var(--color-text-secondary); margin-bottom: 2px; }
-.summary-value { font-size: 16px; font-weight: 600; }
+.skel-tile-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: 2px;
+}
 
-.chart-card { padding: 16px; }
-.chart-title { font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+.chart-card { padding: var(--space-4); box-shadow: var(--shadow-md), var(--edge-highlight); }
+.chart-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: var(--space-3);
+}
 .chart-wrap { height: 320px; }
-.empty-hint { color: var(--color-text-secondary); font-size: 12.5px; padding: 40px 0; text-align: center; line-height: 1.6; }
 
 @media (max-width: 720px) {
   .summary-grid { grid-template-columns: repeat(2, 1fr); }

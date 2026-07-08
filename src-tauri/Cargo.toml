@@ -1,6 +1,6 @@
 [package]
 name = "skylark"
-version = "0.4.13"
+version = "0.4.14"
 description = "Skylark — cross-platform (Windows / macOS) GUI proxy client powered by sing-box"
 authors = ["radium"]
 edition = "2021"

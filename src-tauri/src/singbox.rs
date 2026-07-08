@@ -6,13 +6,17 @@ use tauri::Emitter;
 use tokio::process::Command as TokioCommand;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-/// Open today's rolling log file in append mode under `app_data_dir/logs/`. Returns
-/// `None` if the directory or file cannot be created (logging then stays in-memory only).
-fn open_daily_log_file() -> Option<std::fs::File> {
+/// Open today's rolling log file in append mode under `app_data_dir/logs/`. Returns the
+/// open file together with the date stamp (`YYYYMMDD`) it was opened for, so the writer
+/// can notice a day rollover and reopen against the new day's file. `None` if the
+/// directory or file cannot be created (logging then stays in-memory only).
+fn open_daily_log_file() -> Option<(std::fs::File, String)> {
     let dir = crate::config::app_data_dir().join("logs");
     std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join(format!("skylark-{}.log", chrono::Local::now().format("%Y%m%d")));
-    std::fs::OpenOptions::new().create(true).append(true).open(path).ok()
+    let stamp = chrono::Local::now().format("%Y%m%d").to_string();
+    let path = dir.join(format!("skylark-{}.log", stamp));
+    let file = std::fs::OpenOptions::new().create(true).append(true).open(path).ok()?;
+    Some((file, stamp))
 }
 
 /// Windows CREATE_NO_WINDOW flag: prevents a console window from popping up
@@ -427,9 +431,24 @@ pub async fn start_singbox(
                 };
                 let mut reader = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
-                    if let Some(f) = log_file.as_mut() {
+                    if log_file.is_some() {
                         use std::io::Write;
-                        let _ = writeln!(f, "{}", line);
+                        // Day rollover: the log file was opened for the date at core start and
+                        // its handle would otherwise be written to forever, so a core that runs
+                        // past midnight keeps appending to its start-day file (which is why
+                        // skylark-<startday>.log grows unbounded across days). Compare the
+                        // current date against the stamp we opened with and reopen against the
+                        // new day's file when it advances.
+                        let today = chrono::Local::now().format("%Y%m%d").to_string();
+                        let rolled = log_file.as_ref().map(|(_, s)| *s != today).unwrap_or(false);
+                        if rolled {
+                            if let Some(reopened) = open_daily_log_file() {
+                                log_file = Some(reopened);
+                            }
+                        }
+                        if let Some((f, _)) = log_file.as_mut() {
+                            let _ = writeln!(f, "{}", line);
+                        }
                     }
                     {
                         let mut s = state_log.lock().unwrap_or_else(|e| e.into_inner());

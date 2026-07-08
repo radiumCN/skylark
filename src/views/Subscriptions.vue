@@ -10,6 +10,7 @@ import { formatBytes } from "../utils/format";
 import { copyToClipboard, readFromClipboard } from "../utils/clipboard";
 import { useTemporaryFlag } from "../composables/useTemporaryFlag";
 import EmptyState from "../components/EmptyState.vue";
+import ToggleSwitch from "../components/ToggleSwitch.vue";
 
 const { t } = useI18n();
 const store = useAppStore();
@@ -284,7 +285,7 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
   <div class="page">
     <div class="page-header">
       <h1 class="page-title">{{ t("subscriptions.title") }}</h1>
-      <div style="display:flex;gap:8px;">
+      <div class="header-actions">
         <button
           v-if="store.subscriptions.length > 0"
           class="btn btn-ghost"
@@ -317,11 +318,11 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
     <!-- Add Dialog (inline) -->
     <div v-if="showAddDialog" class="card add-dialog">
       <div class="dialog-title">{{ t("subscriptions.add") }}</div>
-      <div class="mode-tabs">
-        <button class="mode-tab" :class="{ active: addMode === 'url' }" @click="addMode = 'url'">
+      <div class="segmented mode-tabs">
+        <button class="segmented__item" :class="{ active: addMode === 'url' }" @click="addMode = 'url'">
           {{ t("subscriptions.modeUrl") }}
         </button>
-        <button class="mode-tab" :class="{ active: addMode === 'text' }" @click="addMode = 'text'">
+        <button class="segmented__item" :class="{ active: addMode === 'text' }" @click="addMode = 'text'">
           {{ t("subscriptions.modeText") }}
         </button>
       </div>
@@ -492,14 +493,11 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
                 {{ opt.label }}
               </option>
             </select>
-            <button
-              class="mini-toggle"
-              :class="{ on: sub.auto_update }"
-              :title="sub.auto_update ? t('subscriptions.autoUpdateOff') : t('subscriptions.autoUpdateOn')"
-              @click="toggleAutoUpdate(sub.id, sub.auto_update, sub.update_interval)"
-            >
-              <span class="mini-knob" />
-            </button>
+            <ToggleSwitch
+              :model-value="sub.auto_update"
+              :aria-label="sub.auto_update ? t('subscriptions.autoUpdateOff') : t('subscriptions.autoUpdateOn')"
+              @update:model-value="toggleAutoUpdate(sub.id, sub.auto_update, sub.update_interval)"
+            />
           </div>
         </div>
       </div>
@@ -608,10 +606,6 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 </template>
 
 <style scoped>
-.page { display: flex; flex-direction: column; gap: 16px; max-width: 800px; }
-.page-header { display: flex; align-items: center; justify-content: space-between; }
-.page-title { font-size: 20px; font-weight: 600; }
-
 .add-dialog { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
 .dialog-title { font-size: 15px; font-weight: 600; }
 .form-group { display: flex; flex-direction: column; gap: 6px; }
@@ -623,22 +617,9 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
   font-family: 'Cascadia Code', monospace; font-size: 12px; line-height: 1.5;
 }
 
-.mode-tabs {
-  display: flex; gap: 4px; padding: 3px;
-  background: var(--color-neutral); border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
-}
-.mode-tab {
-  flex: 1; padding: 6px 12px; border: none; border-radius: var(--radius-sm);
-  background: transparent; color: var(--color-text-secondary);
-  font-size: 12px; font-weight: 500; cursor: pointer;
-  transition: background 0.15s ease-out, color 0.15s ease-out;
-}
-.mode-tab:hover { color: var(--color-text); }
-.mode-tab.active {
-  background: var(--color-surface-strong); color: var(--color-text);
-  box-shadow: var(--shadow-sm), var(--edge-highlight);
-}
+/* Stretch the shared segmented control to fill the dialog width. */
+.mode-tabs { display: flex; }
+.mode-tabs .segmented__item { flex: 1; justify-content: center; }
 .form-error {
   display: flex; align-items: center; gap: 6px;
   font-size: 12px; color: var(--color-error);
@@ -733,20 +714,6 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
   box-shadow: 0 0 0 3px var(--color-primary-soft);
 }
 
-.mini-toggle {
-  width: 34px; height: 20px; border-radius: 100px;
-  background: var(--color-neutral-strong); border: none; cursor: pointer;
-  position: relative; transition: background 0.2s ease-out; padding: 0; flex-shrink: 0;
-}
-.mini-toggle.on { background: var(--color-primary); }
-.mini-knob {
-  position: absolute; top: 2px; left: 2px;
-  width: 16px; height: 16px; border-radius: 50%;
-  background: white; transition: transform 0.2s; display: block;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.2);
-}
-.mini-toggle.on .mini-knob { transform: translateX(14px); }
-
 .hint-card { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
 .hint-title { font-size: 11px; font-weight: 600; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
 .hint-list { display: flex; flex-direction: column; gap: 8px; }
@@ -754,7 +721,7 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 
 /* ─── QR Code dialog ─── */
 .qr-overlay {
-  position: fixed; inset: 0; z-index: 1000;
+  position: fixed; inset: 0; z-index: var(--z-modal);
   background: rgba(0,0,0,0.55);
   backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center;

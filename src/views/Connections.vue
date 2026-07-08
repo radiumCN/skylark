@@ -186,7 +186,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page--wide page--fill">
     <div class="page-header">
       <h1 class="page-title">{{ t('connections.title') }}</h1>
       <div class="header-actions">
@@ -196,11 +196,11 @@ onUnmounted(() => {
           <span class="upload-val">↑ {{ formatBytes(totals.upload) }}</span>
           <span class="download-val">↓ {{ formatBytes(totals.download) }}</span>
         </span>
-        <div class="view-tabs">
-          <button class="view-tab" :class="{ active: !grouped }" @click="grouped = false">
+        <div class="segmented">
+          <button class="segmented__item" :class="{ active: !grouped }" @click="grouped = false">
             {{ t('connections.viewList') }}
           </button>
-          <button class="view-tab" :class="{ active: grouped }" @click="grouped = true">
+          <button class="segmented__item" :class="{ active: grouped }" @click="grouped = true">
             {{ t('connections.viewGrouped') }}
           </button>
         </div>
@@ -215,7 +215,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <input class="input" v-model="search" :placeholder="t('connections.searchPlaceholder')" style="max-width: 400px" />
+    <input class="input conn-search" v-model="search" :placeholder="t('connections.searchPlaceholder')" />
 
     <EmptyState
       v-if="connections.length === 0 && !loading"
@@ -328,28 +328,18 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.page { display: flex; flex-direction: column; gap: 12px; height: 100%; }
-.page-header { display: flex; align-items: center; justify-content: space-between; }
-.page-title { font-size: 20px; font-weight: 600; }
-.header-actions { display: flex; align-items: center; gap: 8px; }
 .conn-count { font-size: 12px; color: var(--color-text-secondary); }
 .conn-total { font-size: 12px; color: var(--color-text-secondary); display: inline-flex; gap: 6px; align-items: center; }
 
-.view-tabs { display: flex; gap: 2px; background: var(--color-neutral-soft); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 2px; }
-.view-tab {
-  border: none; background: transparent; cursor: pointer; font-size: 12px;
-  padding: 4px 10px; border-radius: var(--radius-sm); color: var(--color-text-secondary);
-  transition: background 0.15s ease-out, color 0.15s ease-out;
-}
-.view-tab:hover { color: var(--color-text); }
-.view-tab.active { background: var(--color-primary-soft); color: var(--color-primary); box-shadow: var(--shadow-sm); }
+/* Search field: sits above the table, capped so it doesn't stretch full-width. */
+.conn-search { max-width: 400px; }
 
 .sortable { cursor: pointer; user-select: none; transition: color 0.15s ease-out; }
 .sortable:hover { color: var(--color-text); }
 .sort-arrow { margin-left: 3px; font-size: 9px; color: var(--color-primary); }
 
 .conn-table-wrapper {
-  overflow: auto; flex: 1;
+  flex: 1; min-height: 0; overflow: auto;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -363,7 +353,7 @@ onUnmounted(() => {
   border-bottom: 1px solid var(--color-border);
   color: var(--color-text-secondary); font-weight: 600;
   font-size: 11px; letter-spacing: 0.4px; text-transform: uppercase;
-  position: sticky; top: 0; background: var(--color-surface); z-index: 1;
+  position: sticky; top: 0; background: var(--color-surface); z-index: var(--z-sticky);
 }
 .conn-table td {
   padding: 7px 10px;

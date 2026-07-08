@@ -18,6 +18,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useI18n } from "vue-i18n";
 import { useAppStore } from "../stores/app";
 import { formatBytes } from "../utils/format";
+import ToggleSwitch from "../components/ToggleSwitch.vue";
+import StatTile from "../components/StatTile.vue";
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Filler, Tooltip);
 
@@ -216,27 +218,26 @@ onUnmounted(() => {
       <button class="btn btn-ghost" @click="store.error = null">{{ t('home.close') }}</button>
     </div>
 
-    <!-- Connection Hero — promoted status, driven by the switches below -->
-    <div class="card hero-card" :class="{ active: store.proxying }">
-      <div class="hero-icon" :class="store.proxying ? 'on' : 'off'">
-        <component :is="store.proxying ? Wifi : WifiOff" :size="26" />
+    <!-- Control Center — status hero + connection controls in one glass panel -->
+    <div class="card control-center" :class="{ active: store.proxying }">
+      <!-- Status hero -->
+      <div class="cc-hero">
+        <div class="hero-icon" :class="store.proxying ? 'on' : 'off'">
+          <component :is="store.proxying ? Wifi : WifiOff" :size="26" />
+        </div>
+        <div class="hero-main">
+          <div class="hero-label">{{ t('home.proxyStatus') }}</div>
+          <div class="hero-status">{{ connectionLabel }}</div>
+        </div>
+        <div v-if="store.proxying" class="hero-meta">
+          <span class="hero-pill">{{ proxyModeLabel }}</span>
+        </div>
       </div>
-      <div class="hero-main">
-        <div class="hero-label">{{ t('home.proxyStatus') }}</div>
-        <div class="hero-status">{{ connectionLabel }}</div>
-      </div>
-      <div v-if="store.proxying" class="hero-meta">
-        <span class="hero-pill">{{ proxyModeLabel }}</span>
-      </div>
-    </div>
 
-    <!-- Network Settings -->
-    <div class="card net-settings-card">
-      <div class="net-settings-title">
-        <Globe :size="14" />
-        {{ t('home.networkSettings') }}
-      </div>
-      <div class="net-settings-body">
+      <div class="cc-divider" />
+
+      <!-- Connection controls -->
+      <div class="cc-body">
         <!-- System Proxy toggle — starts/stops the proxy; mutually exclusive with TUN -->
         <div class="net-row">
           <div class="net-row-left">
@@ -251,15 +252,12 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
-          <button
-            class="toggle-btn"
-            :class="{ on: systemProxyOn, 'no-anim': !systemProxyReady }"
+          <ToggleSwitch
+            :model-value="systemProxyOn"
             :disabled="store.loading"
-            @click="toggleSystemProxy"
-            :title="systemProxyOn ? t('home.systemProxyToggleOff') : t('home.systemProxyToggleOn')"
-          >
-            <span class="toggle-knob" />
-          </button>
+            :aria-label="systemProxyOn ? t('home.systemProxyToggleOff') : t('home.systemProxyToggleOn')"
+            @update:model-value="toggleSystemProxy"
+          />
         </div>
 
         <div class="net-divider" />
@@ -273,11 +271,11 @@ onUnmounted(() => {
               <div class="net-row-sub">{{ proxyModeLabel }}</div>
             </div>
           </div>
-          <div class="mode-pills">
+          <div class="segmented">
             <button
               v-for="[k, labelKey] in [['rule','rule'],['global','global'],['direct','direct']]"
               :key="k"
-              class="mode-pill"
+              class="segmented__item"
               :class="{ active: store.config.proxy_mode === k }"
               @click="store.setProxyMode(k)"
             >{{ t('home.' + labelKey) }}</button>
@@ -299,126 +297,102 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
-          <button
-            class="toggle-btn"
-            :class="{ on: tunOn }"
+          <ToggleSwitch
+            :model-value="tunOn"
             :disabled="store.loading"
-            @click="toggleTun"
-          >
-            <span class="toggle-knob" />
-          </button>
+            :aria-label="t('home.tunMode')"
+            @update:model-value="toggleTun"
+          />
         </div>
       </div>
     </div>
 
-    <!-- Detail stats -->
-    <div class="stat-grid">
-      <!-- Active Node -->
-      <div class="card stat-card">
-        <div class="stat-icon icon-node">
-          <Server :size="18" />
-        </div>
-        <div class="stat-content">
-          <div class="stat-label">{{ t('home.currentNode') }}</div>
-          <div class="stat-value text-sm">
-            {{ store.isAutoGroup ? t('home.autoSelect') : (store.activeNode?.name ?? t('home.noneSelected')) }}
-          </div>
-          <div class="stat-sub">
-            <template v-if="store.isAutoGroup">
-              {{ store.activeNodeNow ? `→ ${store.activeNodeNow}` : t('home.dynamicSelecting') }}
-            </template>
-            <template v-else>{{ store.activeNode?.server ?? "--" }}</template>
-          </div>
-        </div>
+    <!-- Dashboard bento: left = node + uptime tiles, right = realtime chart -->
+    <div class="dashboard-grid">
+      <div class="dashboard-col">
+        <StatTile
+          :icon="Server"
+          :label="t('home.currentNode')"
+          :value="store.isAutoGroup ? t('home.autoSelect') : (store.activeNode?.name ?? t('home.noneSelected'))"
+          :sub="store.isAutoGroup
+            ? (store.activeNodeNow ? `→ ${store.activeNodeNow}` : t('home.dynamicSelecting'))
+            : (store.activeNode?.server ?? '--')"
+          accent="primary"
+          compact
+        />
+        <StatTile
+          :icon="Clock"
+          :label="t('home.uptime')"
+          :value="displayUptime"
+          :sub="memoryUsage !== null
+            ? `${t('home.memory', { value: formatBytes(memoryUsage) })} · ${store.status.version ?? 'sing-box'}`
+            : (store.status.version ?? 'sing-box')"
+          accent="amber"
+        />
       </div>
 
-      <!-- Uptime -->
-      <div class="card stat-card">
-        <div class="stat-icon icon-uptime">
-          <Clock :size="18" />
-        </div>
-        <div class="stat-content">
-          <div class="stat-label">{{ t('home.uptime') }}</div>
-          <div class="stat-value">{{ displayUptime }}</div>
-          <div class="stat-sub">
-            <template v-if="memoryUsage !== null">
-              {{ t('home.memory', { value: formatBytes(memoryUsage) }) }} · {{ store.status.version ?? "sing-box" }}
-            </template>
-            <template v-else>
-              {{ store.status.version ?? "sing-box" }}
-            </template>
+      <!-- Traffic Chart -->
+      <div class="card chart-card">
+        <div class="chart-header">
+          <Zap :size="15" />
+          <span>{{ t('home.realtimeTraffic') }}</span>
+          <div class="chart-legend">
+            <span class="legend-item upload-color"><i class="legend-dot" /> {{ t('home.upload') }}</span>
+            <span class="legend-item download-color"><i class="legend-dot" /> {{ t('home.download') }}</span>
           </div>
+        </div>
+        <div class="chart-body">
+          <Line v-if="store.trafficHistory.length > 1" :data="chartData" :options="chartOptions" />
+          <div v-else class="chart-empty">{{ t('home.chartEmpty') }}</div>
         </div>
       </div>
     </div>
 
-    <!-- Traffic Stats -->
+    <!-- Traffic speed tiles -->
     <div class="traffic-row">
-      <div class="card traffic-stat upload">
-        <ArrowUp :size="16" />
-        <span class="traffic-label">{{ t('home.uploadSpeed') }}</span>
-        <span class="traffic-value">{{ formatBytes(uploadSpeed) }}/s</span>
-        <span class="traffic-total">{{ t('home.totalSinceStart', { value: formatBytes(totalUpload) }) }}</span>
-      </div>
-      <div class="card traffic-stat download">
-        <ArrowDown :size="16" />
-        <span class="traffic-label">{{ t('home.downloadSpeed') }}</span>
-        <span class="traffic-value">{{ formatBytes(downloadSpeed) }}/s</span>
-        <span class="traffic-total">{{ t('home.totalSinceStart', { value: formatBytes(totalDownload) }) }}</span>
-      </div>
-    </div>
-
-    <!-- Traffic Chart -->
-    <div class="card chart-card">
-      <div class="chart-header">
-        <Zap :size="15" />
-        <span>{{ t('home.realtimeTraffic') }}</span>
-        <div class="chart-legend">
-          <span class="legend-item upload-color"><i class="legend-dot" /> {{ t('home.upload') }}</span>
-          <span class="legend-item download-color"><i class="legend-dot" /> {{ t('home.download') }}</span>
-        </div>
-      </div>
-      <div class="chart-body">
-        <Line v-if="store.trafficHistory.length > 1" :data="chartData" :options="chartOptions" />
-        <div v-else class="chart-empty">{{ t('home.chartEmpty') }}</div>
-      </div>
+      <StatTile
+        :icon="ArrowUp"
+        :label="t('home.uploadSpeed')"
+        :value="`${formatBytes(uploadSpeed)}/s`"
+        :sub="t('home.totalSinceStart', { value: formatBytes(totalUpload) })"
+        accent="primary"
+        compact
+      />
+      <StatTile
+        :icon="ArrowDown"
+        :label="t('home.downloadSpeed')"
+        :value="`${formatBytes(downloadSpeed)}/s`"
+        :sub="t('home.totalSinceStart', { value: formatBytes(totalDownload) })"
+        accent="success"
+        compact
+      />
     </div>
   </div>
 </template>
 
 <style scoped>
-.page { display: flex; flex-direction: column; gap: 16px; max-width: 900px; }
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.page-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--color-text);
-}
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-/* Connection Hero */
-.hero-card {
-  padding: 18px 20px;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  position: relative;
-  overflow: hidden;
+/* Control Center — status hero + connection controls fused into one glass panel */
+.control-center {
+  padding: var(--space-4) var(--space-5);
   box-shadow: var(--shadow-md), var(--edge-highlight);
   transition: border-color 0.25s ease, box-shadow 0.25s ease;
 }
-.hero-card.active {
+.control-center.active {
   border-color: var(--color-success-glow);
-  background: var(--color-surface);
   box-shadow: var(--shadow-md), var(--edge-highlight), 0 0 0 1px var(--color-success-glow);
 }
+.cc-hero {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  position: relative;
+}
+.cc-divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: var(--space-4) 0 var(--space-2);
+}
+.cc-body { display: flex; flex-direction: column; }
 .hero-icon {
   width: 52px; height: 52px;
   border-radius: var(--radius-lg);
@@ -465,57 +439,33 @@ onUnmounted(() => {
   background: var(--color-primary-soft); color: var(--color-primary);
 }
 
-.stat-grid {
+/* Bento dashboard — left tile column + realtime chart */
+.dashboard-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
+  grid-template-columns: 1fr 1.4fr;
+  gap: var(--space-3);
+  align-items: stretch;
 }
-.stat-card {
-  padding: 16px; display: flex; align-items: flex-start; gap: 12px;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+.dashboard-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
-.stat-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md), var(--edge-highlight); }
-.stat-icon {
-  width: 40px; height: 40px; border-radius: var(--radius-lg);
-  display: flex; align-items: center; justify-content: center;
-  flex-shrink: 0;
-}
-.stat-content { flex: 1; min-width: 0; }
-.stat-label { font-size: 11px; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
-.stat-value { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.text-sm { font-size: 13px !important; }
-.stat-sub { font-size: 11px; color: var(--color-text-muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dashboard-col > :deep(.stat-tile) { flex: 1; }
 
-/* Harmonized icon palette — indigo-led cool set + green for status */
-.icon-green { background: var(--color-success-soft); color: var(--color-success); }
-.icon-blue,
-.icon-node { background: var(--color-primary-soft); color: var(--color-primary); }
+/* Icon tints used by the control-center rows */
+.icon-blue { background: var(--color-primary-soft); color: var(--color-primary); }
 .icon-violet { background: rgba(124, 92, 236, 0.13); color: var(--accent-violet); }
 .icon-teal { background: rgba(14, 155, 142, 0.14); color: var(--accent-teal); }
-.icon-amber,
-.icon-uptime { background: rgba(193, 128, 30, 0.14); color: var(--accent-amber); }
 
+/* Traffic speed tiles — 2-up compact row */
 .traffic-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: var(--space-3);
 }
-.traffic-stat {
-  padding: 14px 16px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
-}
-.traffic-stat:hover { transform: translateY(-1px); box-shadow: var(--shadow-md), var(--edge-highlight); }
-.traffic-stat.upload { color: var(--color-primary); }
-.traffic-stat.download { color: var(--color-success); }
-.traffic-label { font-size: 12px; color: var(--color-text-secondary); }
-.traffic-value { font-size: 16px; font-weight: 700; margin-left: auto; }
-.traffic-total { font-size: 11px; color: var(--color-text-muted); width: 100%; text-align: right; }
 
-.chart-card { padding: 16px; box-shadow: var(--shadow-md), var(--edge-highlight); }
+.chart-card { padding: var(--space-4); box-shadow: var(--shadow-md), var(--edge-highlight); }
 .chart-header {
   display: flex;
   align-items: center;
@@ -536,15 +486,7 @@ onUnmounted(() => {
   color: var(--color-text-muted); font-size: 13px;
 }
 
-/* Network Settings Card */
-.net-settings-card { padding: 14px 16px; }
-.net-settings-title {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 11px; font-weight: 600; color: var(--color-text-secondary);
-  text-transform: uppercase; letter-spacing: 0.5px;
-  margin-bottom: 10px;
-}
-.net-settings-body { display: flex; flex-direction: column; }
+/* Connection control rows (inside the Control Center panel) */
 .net-row {
   display: flex; align-items: center; justify-content: space-between;
   padding: 8px 0; gap: 12px;
@@ -558,51 +500,6 @@ onUnmounted(() => {
 .net-row-label { font-size: 13px; font-weight: 500; }
 .net-row-sub { font-size: 11px; color: var(--color-text-muted); margin-top: 1px; }
 .net-divider { height: 1px; background: var(--color-border); margin: 2px 0; }
-
-/* Toggle switch */
-.toggle-btn {
-  width: 42px; height: 24px; border-radius: 100px;
-  background: var(--color-border); border: none; cursor: pointer;
-  position: relative; transition: background 0.2s, box-shadow 0.2s; flex-shrink: 0;
-  padding: 0;
-}
-.toggle-btn.on {
-  background: var(--color-primary);
-  box-shadow: 0 0 0 1px transparent, 0 2px 8px var(--color-primary-glow);
-}
-.toggle-btn:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 2px;
-}
-.toggle-knob {
-  position: absolute; top: 3px; left: 3px;
-  width: 18px; height: 18px; border-radius: 50%;
-  background: white; transition: transform 0.2s;
-  display: block;
-}
-.toggle-btn.on .toggle-knob { transform: translateX(18px); }
-.toggle-btn.no-anim,
-.toggle-btn.no-anim .toggle-knob { transition: none; }
-.toggle-btn.toggle-disabled {
-  opacity: 0.35; cursor: not-allowed;
-  background: var(--color-border) !important;
-}
-.row-dimmed { opacity: 0.6; }
-.row-dimmed .net-row-sub { color: var(--color-text-muted); font-style: italic; }
-
-/* Mode pills */
-.mode-pills { display: flex; gap: 4px; }
-.mode-pill {
-  padding: 3px 10px; border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
-  background: transparent; color: var(--color-text-secondary);
-  font-size: 11px; cursor: pointer; transition: all 0.15s;
-}
-.mode-pill:hover { background: var(--color-neutral); }
-.mode-pill.active {
-  background: var(--color-primary); color: white; border-color: transparent;
-  box-shadow: 0 2px 8px var(--color-primary-glow);
-}
 
 .error-banner {
   display: flex; align-items: center; justify-content: space-between;

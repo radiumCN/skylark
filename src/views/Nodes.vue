@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
-import { Gauge, RefreshCw, CheckCircle, Signal, Zap, ArrowUpDown, Plus, Trash2, Pencil, Layers } from "@lucide/vue";
+import { Gauge, RefreshCw, CheckCircle, Signal, Zap, ArrowUpDown, Plus, Trash2, Pencil, Layers, ChevronDown } from "@lucide/vue";
 import { useAppStore } from "../stores/app";
 import { useI18n } from "vue-i18n";
 import { useDelayedRefresh } from "../composables/useDelayedRefresh";
@@ -44,6 +44,7 @@ function manualRefresh() {
 }
 
 // ─── Custom proxy groups ─────────────────────────────────────────────
+const groupsOpen = ref(true); // collapse state for the groups card (layout affordance)
 const showGroupEditor = ref(false);
 const editingGroupId = ref<string | null>(null);
 const groupForm = ref<{ name: string; group_type: string; nodes: string[] }>({
@@ -214,77 +215,88 @@ const autoNowName = computed(() => store.activeNodeNow);
 
 <template>
   <div class="page">
-    <div class="page-header">
-      <h1 class="page-title">{{ t("nodes.title") }}</h1>
-      <div class="header-actions">
-        <span class="node-count">{{ t("nodes.nodeCount", { n: store.nodes.length }) }}</span>
-        <button class="btn btn-ghost" :disabled="testingAll" @click="testAll" :title="t('nodes.testAllTip')">
-          <Gauge :size="14" :class="{ spin: testingAll }" />
-          {{ testingAll ? t("nodes.testing") : t("nodes.testAll") }}
-        </button>
-        <!-- Sort selector -->
-        <div class="sort-group">
-          <ArrowUpDown :size="13" />
-          <button
-            v-for="[k, label] in [['none', t('nodes.sortDefault')],['latency', t('nodes.sortLatency')],['speed', t('nodes.sortSpeed')]]"
-            :key="k"
-            class="sort-btn"
-            :class="{ active: sortBy === k }"
-            @click="sortBy = k as typeof sortBy"
-          >{{ label }}</button>
+    <!-- Sticky glass toolbar: header actions + filters travel with the scroll. -->
+    <div class="toolbar">
+      <div class="page-header">
+        <h1 class="page-title">{{ t("nodes.title") }}</h1>
+        <div class="header-actions">
+          <span class="node-count">{{ t("nodes.nodeCount", { n: store.nodes.length }) }}</span>
+          <button class="btn btn-ghost" :disabled="testingAll" @click="testAll" :title="t('nodes.testAllTip')">
+            <Gauge :size="14" :class="{ spin: testingAll }" />
+            {{ testingAll ? t("nodes.testing") : t("nodes.testAll") }}
+          </button>
+          <!-- Sort selector -->
+          <div class="sort-wrap">
+            <ArrowUpDown :size="13" class="sort-icon" />
+            <div class="segmented">
+              <button
+                v-for="[k, label] in [['none', t('nodes.sortDefault')],['latency', t('nodes.sortLatency')],['speed', t('nodes.sortSpeed')]]"
+                :key="k"
+                class="segmented__item"
+                :class="{ active: sortBy === k }"
+                @click="sortBy = k as typeof sortBy"
+              >{{ label }}</button>
+            </div>
+          </div>
+
+          <button class="btn btn-ghost" @click="manualRefresh" :disabled="refreshing">
+            <RefreshCw :size="14" :class="{ spin: refreshing }" />
+            {{ t("nodes.refresh") }}
+          </button>
         </div>
-
-        <button class="btn btn-ghost" @click="manualRefresh" :disabled="refreshing">
-          <RefreshCw :size="14" :class="{ spin: refreshing }" />
-          {{ t("nodes.refresh") }}
-        </button>
       </div>
-    </div>
 
-    <!-- Filters -->
-    <div class="filters">
-      <input class="input search-input" v-model="search" :placeholder="t('nodes.searchPlaceholder')" />
+      <!-- Filters -->
+      <div class="filters">
+        <input class="input search-input" v-model="search" :placeholder="t('nodes.searchPlaceholder')" />
 
-      <!-- Subscription tabs (show only if more than one sub) -->
-      <div v-if="store.subscriptions.length > 0" class="sub-tabs">
-        <button
-          class="sub-tab"
-          :class="{ active: filterSubId === 'all' }"
-          @click="switchSub('all')"
-        >
-          {{ t("nodes.allTab") }} <span class="sub-count">{{ store.nodes.length }}</span>
-        </button>
-        <button
-          v-for="sub in store.subscriptions"
-          :key="sub.id"
-          class="sub-tab"
-          :class="{ active: filterSubId === sub.id }"
-          @click="switchSub(sub.id)"
-        >
-          {{ sub.name }}
-          <span class="sub-count">{{ store.nodes.filter(n => n.subscription_id === sub.id).length }}</span>
-        </button>
+        <!-- Subscription selector (show only if there is at least one sub) -->
+        <div v-if="store.subscriptions.length > 0" class="segmented sub-segmented">
+          <button
+            class="segmented__item"
+            :class="{ active: filterSubId === 'all' }"
+            @click="switchSub('all')"
+          >
+            {{ t("nodes.allTab") }} <span class="sub-count">{{ store.nodes.length }}</span>
+          </button>
+          <button
+            v-for="sub in store.subscriptions"
+            :key="sub.id"
+            class="segmented__item"
+            :class="{ active: filterSubId === sub.id }"
+            @click="switchSub(sub.id)"
+          >
+            {{ sub.name }}
+            <span class="sub-count">{{ store.nodes.filter(n => n.subscription_id === sub.id).length }}</span>
+          </button>
+        </div>
       </div>
     </div>
 
     <!-- Custom proxy groups -->
     <div v-if="store.nodes.length > 0" class="card group-card">
       <div class="group-head">
-        <div class="group-title">
+        <button
+          class="group-title"
+          :aria-expanded="groupsOpen || showGroupEditor"
+          @click="groupsOpen = !groupsOpen"
+        >
           <Layers :size="14" />
           <span>{{ t("nodes.customGroups") }}</span>
-        </div>
+          <span v-if="store.proxyGroups.length > 0" class="group-count">{{ store.proxyGroups.length }}</span>
+          <ChevronDown :size="15" class="group-chevron" :class="{ open: groupsOpen || showGroupEditor }" />
+        </button>
         <button class="btn btn-ghost btn-sm" @click="openNewGroup">
           <Plus :size="13" />
           {{ t("nodes.newGroup") }}
         </button>
       </div>
 
-      <div v-if="store.proxyGroups.length === 0 && !showGroupEditor" class="group-empty">
+      <div v-if="(groupsOpen || showGroupEditor) && store.proxyGroups.length === 0 && !showGroupEditor" class="group-empty">
         {{ t("nodes.groupEmptyHint") }}
       </div>
 
-      <div v-if="store.proxyGroups.length > 0" class="group-list">
+      <div v-if="(groupsOpen || showGroupEditor) && store.proxyGroups.length > 0" class="group-list">
         <div
           v-for="g in store.proxyGroups"
           :key="g.id"
@@ -465,41 +477,36 @@ const autoNowName = computed(() => store.activeNodeNow);
 </template>
 
 <style scoped>
-.page { display: flex; flex-direction: column; gap: 14px; max-width: 800px; }
-.page-header { display: flex; align-items: center; justify-content: space-between; }
-.page-title { font-size: 20px; font-weight: 600; }
-.header-actions { display: flex; align-items: center; gap: 8px; }
-.node-count { font-size: 12px; color: var(--color-text-secondary); }
-
-.filters { display: flex; flex-direction: column; gap: 10px; }
-.search-input { max-width: 340px; }
-
-.sub-tabs {
-  display: flex; gap: 4px; flex-wrap: wrap;
-  padding-bottom: 8px;
+/* Sticky glass toolbar: title/actions + filters pinned to the scroll top. */
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  margin: calc(var(--space-3) * -1) 0 0;
+  background: var(--color-bg);
   border-bottom: 1px solid var(--color-border);
 }
-.sub-tab {
-  display: flex; align-items: center; gap: 5px;
-  padding: 5px 14px; border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
-  background: transparent; color: var(--color-text-secondary);
-  font-size: var(--fs-sm); font-weight: 500; cursor: pointer;
-  transition: background 0.15s ease-out, border-color 0.15s ease-out, color 0.15s ease-out;
-}
-.sub-tab:hover { background: var(--color-neutral); color: var(--color-text); }
-.sub-tab.active {
-  background: var(--color-primary-soft);
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-  box-shadow: 0 0 0 1px var(--color-primary-glow);
-}
+.node-count { font-size: 12px; color: var(--color-text-secondary); }
+
+.filters { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.search-input { max-width: 340px; flex: 1 1 220px; }
+
+/* Sort control: leading icon + shared segmented pill group. */
+.sort-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.sort-icon { color: var(--color-text-muted); flex-shrink: 0; }
+
+/* Subscription selector reuses the segmented control; may wrap when many subs. */
+.sub-segmented { flex-wrap: wrap; }
 .sub-count {
   font-size: 10px; font-weight: 700;
-  background: var(--color-neutral-strong);
+  background: var(--color-neutral-strong); color: var(--color-text-secondary);
   border-radius: var(--radius-sm); padding: 0 5px; min-width: 18px; text-align: center;
 }
-.sub-tab.active .sub-count {
+.segmented__item.active .sub-count {
   background: var(--color-primary-soft); color: var(--color-primary);
 }
 
@@ -564,26 +571,28 @@ const autoNowName = computed(() => store.activeNodeNow);
 }
 .speed-notice strong { color: var(--color-text); }
 
-.sort-group {
-  display: flex; align-items: center; gap: 3px;
-  padding: 3px 6px 3px 8px; border-radius: var(--radius-md);
-  border: 1px solid var(--color-border);
-  color: var(--color-text-muted); font-size: 12px;
-}
-.sort-btn {
-  padding: 2px 7px; border-radius: var(--radius-sm);
-  border: none; background: transparent;
-  color: var(--color-text-secondary);
-  font-size: var(--fs-xs); cursor: pointer;
-  transition: background 0.15s ease-out, color 0.15s ease-out;
-}
-.sort-btn:hover { background: var(--color-neutral); color: var(--color-text); }
-.sort-btn.active { background: var(--color-primary); color: white; }
-
 /* ─── Custom proxy groups ─── */
 .group-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
-.group-head { display: flex; align-items: center; justify-content: space-between; }
-.group-title { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; }
+.group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.group-title {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 13px; font-weight: 600;
+  padding: 2px 4px; margin: -2px -4px;
+  border: none; background: transparent; color: var(--color-text);
+  border-radius: var(--radius-sm); cursor: pointer;
+  transition: color 0.15s ease-out;
+}
+.group-title:hover { color: var(--color-primary); }
+.group-count {
+  font-size: 10px; font-weight: 700;
+  background: var(--color-neutral-strong); color: var(--color-text-secondary);
+  border-radius: var(--radius-sm); padding: 0 5px; min-width: 18px; text-align: center;
+}
+.group-chevron {
+  color: var(--color-text-muted);
+  transition: transform 0.18s ease-out;
+}
+.group-chevron.open { transform: rotate(180deg); }
 .btn-sm { padding: 3px 10px !important; font-size: 12px; }
 .group-empty { font-size: 12px; color: var(--color-text-muted); }
 .group-list { display: flex; flex-direction: column; gap: 8px; }
@@ -644,4 +653,16 @@ const autoNowName = computed(() => store.activeNodeNow);
 .member-chip.on { border-color: var(--color-primary); background: var(--color-primary-soft); color: var(--color-primary); }
 .member-chip input { margin: 0; }
 .editor-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ─── Narrow-width fallback: keep everything single-column and legible. ─── */
+@media (max-width: 820px) {
+  .page-header { flex-wrap: wrap; }
+  .header-actions { width: 100%; margin-left: 0; }
+  .node-count { margin-right: auto; }
+  .filters { flex-direction: column; align-items: stretch; }
+  .search-input { max-width: none; flex: 1 1 auto; }
+  .sort-wrap { flex-wrap: wrap; }
+  .editor-row { flex-direction: column; }
+  .editor-type { max-width: none; }
+}
 </style>

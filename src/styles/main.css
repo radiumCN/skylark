@@ -66,6 +66,15 @@
 
   --sidebar-width: 220px;
 
+  /* Unified content column for every page (full-width pages opt out via .page--wide). */
+  --page-max: 960px;
+
+  /* Z-index scale — one ladder for the whole app so overlays stack predictably. */
+  --z-sticky: 20;
+  --z-dropdown: 40;
+  --z-modal: 1000;
+  --z-toast: 1100;
+
   /* Attention orange — the app's "warn / mid / caution" hue (distinct from the
      yellow --color-warning). Single source for the many places that used #ca5010. */
   --color-attention: #d1741b;
@@ -323,4 +332,90 @@ html[data-theme="dark"] .badge-green { color: #34d399; }
 .page-leave-to {
   opacity: 0;
   transform: translateY(-6px);
+}
+
+/* ============================================================================
+   Shared page shell — one definition instead of the same block copy-pasted
+   (and drifting) across every view. Views just use these classes.
+   ============================================================================ */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: var(--page-max);
+}
+/* Full-width pages (data tables / console): opt out of the reading-width cap. */
+.page--wide { max-width: none; }
+/* Fill-height pages that own their inner scroll (Connections, Logs).
+   The app-content region has a definite height, so 100% resolves cleanly —
+   no more fragile calc(100vh - …) coupling to the shell padding. */
+.page--fill {
+  height: 100%;
+  min-height: 0;
+}
+
+.page-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 32px;
+}
+.page-title {
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  color: var(--color-text);
+  line-height: 1.2;
+}
+.page-subtitle {
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  margin-top: 2px;
+}
+/* Right-aligned action cluster in a page header (buttons, segmented controls). */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+/* ============================================================================
+   Segmented control — the single "pill group" used everywhere (proxy mode,
+   sort, log level, view switch, range, sub tabs…). Replaces ~7 bespoke copies.
+   ============================================================================ */
+.segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius-md);
+  background: var(--color-neutral-soft);
+  border: 1px solid var(--color-border);
+}
+.segmented__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  user-select: none;
+}
+.segmented__item:hover { color: var(--color-text); }
+.segmented__item.active {
+  background: var(--color-surface-strong);
+  color: var(--color-primary);
+  box-shadow: var(--shadow-sm);
+}
+.segmented__item:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
 }

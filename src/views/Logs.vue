@@ -3,10 +3,11 @@ import { ref, onMounted, onUnmounted, nextTick, watch, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Trash2, ArrowDown, Copy, Download } from "@lucide/vue";
+import { Trash2, ArrowDown, Copy, Download, ScrollText } from "@lucide/vue";
 import { useI18n } from "vue-i18n";
 import { useTemporaryFlag } from "../composables/useTemporaryFlag";
 import { copyToClipboard } from "../utils/clipboard";
+import EmptyState from "../components/EmptyState.vue";
 
 const { t } = useI18n();
 
@@ -102,15 +103,15 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="page">
+  <div class="page page--wide page--fill">
     <div class="page-header">
       <h1 class="page-title">{{ t('logs.title') }}</h1>
       <div class="header-actions">
-        <div class="level-tabs">
+        <div class="segmented">
           <button
             v-for="level in ['all', 'error', 'warn', 'info', 'debug']"
             :key="level"
-            class="level-tab"
+            class="segmented__item"
             :class="{ active: filterLevel === level }"
             @click="filterLevel = level"
           >
@@ -136,9 +137,11 @@ onUnmounted(() => {
     </div>
 
     <div class="log-container card" ref="logContainer">
-      <div v-if="filtered.length === 0" class="log-empty">
-        {{ t('logs.empty') }}
-      </div>
+      <EmptyState
+        v-if="filtered.length === 0"
+        :icon="ScrollText"
+        :title="t('logs.empty')"
+      />
       <div
         v-for="(log, i) in filtered"
         :key="i"
@@ -152,37 +155,8 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.page { display: flex; flex-direction: column; gap: 14px; height: calc(100vh - 40px - 48px); }
-.page-header { display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
-.page-title { font-size: 20px; font-weight: 600; }
-.header-actions { display: flex; align-items: center; gap: 8px; }
-
-.level-tabs {
-  display: flex;
-  gap: 4px;
-  padding: 2px;
-  border-radius: var(--radius-md);
-  background: var(--color-neutral-soft);
-  border: 1px solid var(--color-border);
-}
-.level-tab {
-  padding: 3px 10px;
-  border-radius: var(--radius-sm);
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s, box-shadow 0.15s;
-}
-.level-tab:hover { color: var(--color-text); background: var(--color-neutral); }
-.level-tab.active {
-  background: var(--color-primary-soft);
-  color: var(--color-primary);
-  border-color: transparent;
-  box-shadow: var(--edge-highlight);
-}
+/* Layout comes from the shared .page / .page--wide / .page--fill primitives;
+   the header + segmented control use the global classes too. */
 
 /* Destructive clear: neutral ghost by default, red-tinted on hover */
 .clear-btn:hover {
@@ -192,6 +166,7 @@ onUnmounted(() => {
 
 .log-container {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: var(--space-3) var(--space-4);
   /* Deeper inset so the scrolling body reads as a console inside the glass shell */
@@ -219,10 +194,4 @@ onUnmounted(() => {
   transition: background 0.12s;
 }
 .log-line:hover { background: rgba(255,255,255,0.04); }
-.log-empty {
-  color: var(--color-text-muted);
-  text-align: center;
-  padding: 48px;
-  font-family: 'Segoe UI', sans-serif;
-}
 </style>

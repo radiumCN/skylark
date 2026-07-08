@@ -16,6 +16,7 @@ import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { formatBytes } from "../utils/format";
 import { useTemporaryFlag } from "../composables/useTemporaryFlag";
+import ToggleSwitch from "../components/ToggleSwitch.vue";
 
 const store = useAppStore();
 const { t } = useI18n();
@@ -113,6 +114,57 @@ async function removeProfile(name: string) {
 const { flag: saved, trigger: triggerSaved } = useTemporaryFlag(1500);
 const appVersion = ref("");
 const localConfig = ref<AppConfig>({ ...store.config });
+
+// ─── Section jump nav (additive only — no existing state/handler touched) ──
+// One entry per section, in DOM order. Titles reuse the existing i18n keys so
+// the chip bar stays localized.
+const sections = [
+  { id: "sec-update", key: "settings.appUpdate" },
+  { id: "sec-kernel", key: "settings.kernelManagement" },
+  { id: "sec-system", key: "settings.systemBehavior" },
+  { id: "sec-ports", key: "settings.portConfig" },
+  { id: "sec-subscription", key: "settings.subscription" },
+  { id: "sec-dns", key: "settings.dnsAndNetwork" },
+  { id: "sec-diagnostics", key: "settings.diagnostics" },
+  { id: "sec-profiles", key: "settings.profiles" },
+  { id: "sec-backup", key: "settings.configBackup" },
+  { id: "sec-tun", key: "settings.tunMode" },
+  { id: "sec-autoselect", key: "settings.autoSelect" },
+  { id: "sec-advanced", key: "settings.advancedSettings" },
+] as const;
+const activeSection = ref<string>(sections[0].id);
+let sectionObserver: IntersectionObserver | null = null;
+
+// Click-to-scroll; sections carry scroll-margin-top so they clear the sticky bar.
+function scrollToSection(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// Scroll-spy: highlight the top-most section currently sitting just below the
+// sticky chip bar. Additive lifecycle hooks keep this isolated from the existing
+// onMounted/onUnmounted logic.
+onMounted(() => {
+  sectionObserver = new IntersectionObserver(
+    (entries) => {
+      const visible = entries
+        .filter((e) => e.isIntersecting)
+        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+      if (visible.length > 0) {
+        activeSection.value = (visible[0].target as HTMLElement).id;
+      }
+    },
+    { rootMargin: "-72px 0px -55% 0px", threshold: 0 }
+  );
+  for (const s of sections) {
+    const el = document.getElementById(s.id);
+    if (el) sectionObserver.observe(el);
+  }
+});
+
+onUnmounted(() => {
+  sectionObserver?.disconnect();
+  sectionObserver = null;
+});
 
 // Platform detection (WinTun is a Windows-only requirement).
 const isWindows = /win/i.test(navigator.userAgent);
@@ -499,15 +551,31 @@ onUnmounted(() => {
   <div class="page">
     <div class="page-header">
       <h1 class="page-title">{{ t('settings.title') }}</h1>
-      <Transition name="autosave">
-        <span v-if="saved" class="autosave-badge">
-          <Check :size="12" />{{ t('settings.saved') }}
-        </span>
-      </Transition>
+      <div class="header-actions">
+        <Transition name="autosave">
+          <span v-if="saved" class="autosave-badge">
+            <Check :size="12" />{{ t('settings.saved') }}
+          </span>
+        </Transition>
+      </div>
     </div>
 
+    <!-- Sticky section-jump nav (additive) -->
+    <nav class="section-nav" :aria-label="t('settings.title')">
+      <button
+        v-for="s in sections"
+        :key="s.id"
+        type="button"
+        class="section-chip"
+        :class="{ active: activeSection === s.id }"
+        @click="scrollToSection(s.id)"
+      >
+        {{ t(s.key) }}
+      </button>
+    </nav>
+
     <!-- ─── 应用更新 ─── -->
-    <section class="settings-section">
+    <section id="sec-update" class="settings-section">
       <div class="section-header">
         <Rocket :size="15" />
         <span>{{ t('settings.appUpdate') }}</span>
@@ -608,7 +676,7 @@ onUnmounted(() => {
     </section>
 
     <!-- ─── sing-box 内核管理 ─── -->
-    <section class="settings-section">
+    <section id="sec-kernel" class="settings-section">
       <div class="section-header">
         <Package :size="15" />
         <span>{{ t('settings.kernelManagement') }}</span>
@@ -715,7 +783,7 @@ onUnmounted(() => {
     </section>
 
     <!-- System Behavior -->
-    <section class="settings-section">
+    <section id="sec-system" class="settings-section">
       <div class="section-header">
         <Monitor :size="15" />
         <span>{{ t('settings.systemBehavior') }}</span>
@@ -726,10 +794,7 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.startupWithSystem') }}</div>
             <div class="setting-desc">{{ t('settings.startupWithSystemDesc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.startup_with_system" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.startup_with_system" :aria-label="t('settings.startupWithSystem')" />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -737,10 +802,7 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.startupMinimized') }}</div>
             <div class="setting-desc">{{ t('settings.startupMinimizedDesc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.startup_minimized" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.startup_minimized" :aria-label="t('settings.startupMinimized')" />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -748,10 +810,7 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.allowLan') }}</div>
             <div class="setting-desc">{{ t('settings.allowLanDesc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.allow_lan" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.allow_lan" :aria-label="t('settings.allowLan')" />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -761,10 +820,7 @@ onUnmounted(() => {
               {{ localConfig.close_to_tray ? t('settings.closeToTrayDesc') : t('settings.closeToExitDesc') }}
             </div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.close_to_tray" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.close_to_tray" :aria-label="t('settings.closeButtonBehavior')" />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -772,10 +828,7 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.rememberProxyState') }}</div>
             <div class="setting-desc">{{ t('settings.rememberProxyStateDesc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.restore_proxy_on_startup" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.restore_proxy_on_startup" :aria-label="t('settings.rememberProxyState')" />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -783,10 +836,7 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.logToFile') }}</div>
             <div class="setting-desc">{{ t('settings.logToFileDesc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.log_to_file" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.log_to_file" :aria-label="t('settings.logToFile')" />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -807,7 +857,7 @@ onUnmounted(() => {
     </section>
 
     <!-- Ports -->
-    <section class="settings-section">
+    <section id="sec-ports" class="settings-section">
       <div class="section-header">
         <Globe :size="15" />
         <span>{{ t('settings.portConfig') }}</span>
@@ -849,7 +899,7 @@ onUnmounted(() => {
 
     <!-- DNS / 网络 -->
     <!-- Subscription -->
-    <section class="settings-section">
+    <section id="sec-subscription" class="settings-section">
       <div class="section-header">
         <RefreshCw :size="15" />
         <span>{{ t('settings.subscription') }}</span>
@@ -874,7 +924,7 @@ onUnmounted(() => {
       </div>
     </section>
 
-    <section class="settings-section">
+    <section id="sec-dns" class="settings-section">
       <div class="section-header">
         <Globe :size="15" />
         <span>{{ t('settings.dnsAndNetwork') }}</span>
@@ -893,16 +943,13 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.enableIpv6') }}</div>
             <div class="setting-desc">{{ t('settings.enableIpv6Desc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.enable_ipv6" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.enable_ipv6" :aria-label="t('settings.enableIpv6')" />
         </div>
       </div>
     </section>
 
     <!-- Network diagnostics (N5) -->
-    <section class="settings-section">
+    <section id="sec-diagnostics" class="settings-section">
       <div class="section-header">
         <Zap :size="15" />
         <span>{{ t('settings.diagnostics') }}</span>
@@ -952,7 +999,7 @@ onUnmounted(() => {
     </section>
 
     <!-- Config profiles (N6) -->
-    <section class="settings-section">
+    <section id="sec-profiles" class="settings-section">
       <div class="section-header">
         <Layers :size="15" />
         <span>{{ t('settings.profiles') }}</span>
@@ -994,7 +1041,7 @@ onUnmounted(() => {
     </section>
 
     <!-- Config backup / restore -->
-    <section class="settings-section">
+    <section id="sec-backup" class="settings-section">
       <div class="section-header">
         <Archive :size="15" />
         <span>{{ t('settings.configBackup') }}</span>
@@ -1025,7 +1072,7 @@ onUnmounted(() => {
     </section>
 
     <!-- TUN Mode -->
-    <section class="settings-section">
+    <section id="sec-tun" class="settings-section">
       <div class="section-header">
         <Shield :size="15" />
         <span>{{ t('settings.tunMode') }}</span>
@@ -1123,7 +1170,7 @@ onUnmounted(() => {
     </section>
 
     <!-- Auto-select (URLTest) -->
-    <section class="settings-section">
+    <section id="sec-autoselect" class="settings-section">
       <div class="section-header">
         <Zap :size="15" />
         <span>{{ t('settings.autoSelect') }}</span>
@@ -1175,7 +1222,7 @@ onUnmounted(() => {
     </section>
 
     <!-- Advanced -->
-    <section class="settings-section">
+    <section id="sec-advanced" class="settings-section">
       <div class="section-header">
         <Cpu :size="15" />
         <span>{{ t('settings.advancedSettings') }}</span>
@@ -1227,10 +1274,7 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.autoCheckKernelUpdate') }}</div>
             <div class="setting-desc">{{ t('settings.autoCheckKernelUpdateDesc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.auto_update_notify" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.auto_update_notify" :aria-label="t('settings.autoCheckKernelUpdate')" />
         </div>
         <div class="setting-divider" />
         <div class="setting-row">
@@ -1321,9 +1365,44 @@ onUnmounted(() => {
 .btn-sm { padding: 3px 10px; font-size: 12px; }
 .btn-sm.danger { color: var(--color-error); }
 
-.page { display: flex; flex-direction: column; gap: 20px; max-width: 700px; }
-.page-header { display: flex; align-items: center; justify-content: space-between; }
-.page-title { font-size: 20px; font-weight: 600; }
+/* Sticky section-jump nav — glass bar pinned to the app-content scroll region so
+   the sections scroll underneath it. Chips reuse the section i18n titles. */
+.section-nav {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 8px 4px;
+  margin: 0 -4px;
+  background: var(--color-surface);
+  backdrop-filter: blur(22px) saturate(180%);
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  border-bottom: 1px solid var(--color-border);
+  scrollbar-width: none;
+}
+.section-nav::-webkit-scrollbar { display: none; }
+.section-chip {
+  flex-shrink: 0;
+  padding: 5px 12px;
+  border-radius: 100px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+.section-chip:hover { background: var(--color-neutral-soft); color: var(--color-text); }
+.section-chip.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 2px 8px var(--color-primary-glow);
+}
 
 .autosave-badge {
   display: inline-flex; align-items: center; gap: 5px;
@@ -1336,7 +1415,7 @@ onUnmounted(() => {
 .autosave-enter-active, .autosave-leave-active { transition: opacity 0.3s, transform 0.3s; }
 .autosave-enter-from, .autosave-leave-to { opacity: 0; transform: translateY(-4px); }
 
-.settings-section { display: flex; flex-direction: column; gap: 10px; }
+.settings-section { display: flex; flex-direction: column; gap: 10px; scroll-margin-top: 60px; }
 .section-header {
   display: flex; align-items: center; gap: 7px;
   font-size: 11px; font-weight: 600; color: var(--color-text-secondary);
@@ -1525,7 +1604,7 @@ onUnmounted(() => {
 
 /* Import config dialog */
 .dialog-overlay {
-  position: fixed; inset: 0; z-index: 50;
+  position: fixed; inset: 0; z-index: var(--z-modal);
   display: flex; align-items: center; justify-content: center;
   background: rgba(0,0,0,0.4); backdrop-filter: blur(4px);
 }

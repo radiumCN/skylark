@@ -5,10 +5,11 @@ import { invoke } from "@tauri-apps/api/core";
 
 const { t } = useI18n();
 import {
-  Plus, Trash2, ToggleLeft, ToggleRight, ChevronDown, ChevronUp,
+  Plus, Trash2, ChevronDown, ChevronUp,
   Filter, Globe, Layers, BookMarked, Info, RotateCcw, GripVertical
 } from "@lucide/vue";
 import EmptyState from "../components/EmptyState.vue";
+import ToggleSwitch from "../components/ToggleSwitch.vue";
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -358,10 +359,9 @@ onMounted(() => {
       <div v-if="providers.length === 0" class="provider-empty">{{ t("rules.noRemoteRuleSet") }}</div>
       <div v-else class="provider-list">
         <div v-for="p in providers" :key="p.id" class="provider-item" :class="{ disabled: !p.enabled }">
-          <button class="toggle-btn" :title="p.enabled ? t('rules.clickDisable') : t('rules.clickEnable')" @click="toggleProvider(p.id)">
-            <ToggleRight v-if="p.enabled" :size="18" class="toggle-on" />
-            <ToggleLeft v-else :size="18" class="toggle-off" />
-          </button>
+          <span class="toggle-cell" :title="p.enabled ? t('rules.clickDisable') : t('rules.clickEnable')">
+            <ToggleSwitch :model-value="p.enabled" @update:model-value="toggleProvider(p.id)" />
+          </span>
           <div class="provider-info">
             <div class="provider-name">
               {{ p.name }}
@@ -430,14 +430,13 @@ onMounted(() => {
         <div class="rule-header" @click="expandedId = expandedId === rule.id ? null : rule.id">
           <GripVertical :size="14" class="drag-handle" :title="t('rules.dragHint')" @click.stop />
           <div class="rule-order">{{ index + 1 }}</div>
-          <button
-            class="toggle-btn"
+          <span
+            class="toggle-cell"
             :title="rule.enabled ? t('rules.clickDisable') : t('rules.clickEnable')"
-            @click.stop="toggleRule(rule.id)"
+            @click.stop
           >
-            <ToggleRight v-if="rule.enabled" :size="20" class="toggle-on" />
-            <ToggleLeft v-else :size="20" class="toggle-off" />
-          </button>
+            <ToggleSwitch :model-value="rule.enabled" @update:model-value="toggleRule(rule.id)" />
+          </span>
           <div class="rule-info">
             <div class="rule-name">{{ rule.name }}</div>
             <div class="rule-summary">{{ matchSummary(rule) }}</div>
@@ -605,11 +604,8 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.page { display: flex; flex-direction: column; gap: 14px; max-width: 860px; }
-.page-header { display: flex; align-items: flex-start; justify-content: space-between; }
-.page-title { font-size: 20px; font-weight: 600; }
-.page-subtitle { font-size: 12px; color: var(--color-text-muted); margin-top: 2px; }
-.header-actions { display: flex; gap: 8px; }
+/* Page primitives (.page/.page-header/.page-title/.page-subtitle/.header-actions)
+   are provided globally by main.css. */
 
 /* Presets */
 .preset-card { padding: 12px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -669,9 +665,7 @@ onMounted(() => {
   font-size: 11px; font-weight: 700; color: var(--color-text-muted);
   flex-shrink: 0;
 }
-.toggle-btn { background: none; border: none; cursor: pointer; padding: 2px; display: flex; }
-.toggle-on { color: var(--color-primary); }
-.toggle-off { color: var(--color-text-muted); }
+.toggle-cell { display: flex; align-items: center; flex-shrink: 0; }
 .rule-info { flex: 1; min-width: 0; }
 .rule-name { font-size: 13px; font-weight: 600; }
 .rule-summary { font-size: 11px; color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
@@ -702,7 +696,7 @@ onMounted(() => {
 
 /* Add Dialog */
 .dialog-overlay {
-  position: fixed; inset: 0; z-index: 100;
+  position: fixed; inset: 0; z-index: var(--z-modal);
   background: rgba(0,0,0,0.5);
   display: flex; align-items: center; justify-content: center;
   padding: 24px;

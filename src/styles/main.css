@@ -185,6 +185,30 @@ html, body, #app {
 /* Smoothly cross-fade the whole surface when the theme flips. */
 html { transition: background-color 0.3s ease; }
 
+/* ── Text selection policy ────────────────────────────────────────────────
+   Native-app feel: UI chrome (labels, nav, buttons, badges, titles) is NOT
+   selectable like a web page. Selection is re-enabled only where it's useful:
+   editable fields, and data the user legitimately copies (subscription URLs,
+   log lines, connection rows, node addresses). Tag any future copyable value
+   with the `.selectable` utility. */
+#app {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+input,
+textarea,
+[contenteditable="true"],
+.selectable,
+.sub-url,
+.log-line,
+.conn-table,
+.node-server {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: auto;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 7px;

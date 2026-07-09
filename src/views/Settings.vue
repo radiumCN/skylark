@@ -1269,6 +1269,20 @@ onUnmounted(() => {
         <div class="setting-divider" />
         <div class="setting-row">
           <div class="setting-info">
+            <div class="setting-label">{{ t('settings.density') }}</div>
+            <div class="setting-desc">{{ t('settings.densityDesc') }}</div>
+          </div>
+          <Select
+            v-model="localConfig.density"
+            :options="[
+              { value: 'standard', label: t('settings.densityStandard') },
+              { value: 'compact', label: t('settings.densityCompact') },
+            ]"
+          />
+        </div>
+        <div class="setting-divider" />
+        <div class="setting-row">
+          <div class="setting-info">
             <div class="setting-label">{{ t('settings.language') }}</div>
             <div class="setting-desc">{{ t('settings.languageDesc') }}</div>
           </div>

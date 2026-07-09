@@ -184,6 +184,9 @@ html[data-density="compact"] {
   --space-5: 14px;
   --space-6: 16px;
   --space-8: 22px;
+  /* 200px, not less: the two-column traffic readout ellipsises a 3-digit
+     "123.4 MB/s" below ~196px. */
+  --sidebar-width: 200px;
 }
 
 /* Shell. The two full-bleed bars below negate .app-content's side padding, so
@@ -194,6 +197,14 @@ html[data-density="compact"] .section-nav { margin: 0 -16px; padding: 8px 16px; 
 
 html[data-density="compact"] .btn { padding: 5px 11px; }
 html[data-density="compact"] .input { padding: 6px 10px; }
+
+/* Sidebar. Nav rows stay ≥28px tall so they remain comfortable click targets. */
+html[data-density="compact"] .sidebar { padding: 6px 6px 8px; }
+html[data-density="compact"] .brand { padding: 8px 8px 10px; }
+html[data-density="compact"] .nav-item { padding: 7px 10px; }
+html[data-density="compact"] .sidebar-footer { padding-top: 6px; }
+html[data-density="compact"] .proxy-status { padding: 6px 10px; }
+html[data-density="compact"] .sidebar-traffic { padding: 5px 8px; }
 
 /* List rows — where density actually pays off. */
 html[data-density="compact"] .node-item { padding: 8px 12px; }

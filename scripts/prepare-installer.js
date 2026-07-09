@@ -10,6 +10,10 @@
  * ratios are preserved without distortion (AI-generated PNGs are landscape).
  *
  * macOS DMG background stays as PNG (Tauri accepts it natively).
+ *
+ * Every logo mark here is derived from `src-tauri/icons/icon.png` (the single
+ * source of truth for the app icon) rather than hand-drawn, so a future icon
+ * change can never leave the tray / installer showing a stale logo.
  */
 
 import sharp from "sharp";
@@ -19,6 +23,12 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = `${__dirname}/..`;
+
+/** Single source of truth for the app icon. */
+const APP_ICON = `${root}/src-tauri/icons/icon.png`;
+
+/** SVGs are rasterized at 2× (144 dpi vs the 72 dpi default) then downscaled. */
+const SCALE = 2;
 
 // ─── SVG Designs ──────────────────────────────────────────────────────────────
 
@@ -63,19 +73,7 @@ const SIDEBAR_SVG = `
   <line x1="115" y1="45"  x2="148" y2="35"  stroke="#1e3a5f" stroke-width="0.8" opacity="0.6"/>
   <line x1="55"  y1="8"   x2="42"  y2="40"  stroke="#1e3a5f" stroke-width="0.8" opacity="0.5"/>
 
-  <!-- Hexagonal outer ring -->
-  <polygon
-    points="82,72 106,86 106,114 82,128 58,114 58,86"
-    fill="none" stroke="#3b82f6" stroke-width="2.5" opacity="0.9"/>
-
-  <!-- Hexagonal inner ring -->
-  <polygon
-    points="82,82 98,91 98,109 82,118 66,109 66,91"
-    fill="#1e3a5f" stroke="#2563eb" stroke-width="1.5" opacity="0.8"/>
-
-  <!-- Arrow icon inside hexagon -->
-  <path d="M70,100 L86,100 M80,93 L87,100 L80,107"
-        fill="none" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- App icon is composited here at (50,66) 64×64 — see SIDEBAR_OVERLAY -->
 
   <!-- Skylark title -->
   <text x="82" y="155"
@@ -115,13 +113,7 @@ const HEADER_SVG = `
   <line x1="118" y1="0" x2="150" y2="57" stroke="#2563eb" stroke-width="1.2" opacity="0.5"/>
   <line x1="130" y1="0" x2="150" y2="36" stroke="#3b82f6" stroke-width="0.7" opacity="0.35"/>
 
-  <!-- Hexagon icon (compact) -->
-  <polygon
-    points="20,28 30,22 40,28 40,36 30,42 20,36"
-    fill="none" stroke="#3b82f6" stroke-width="1.8" opacity="0.95"/>
-  <!-- Arrow inside -->
-  <path d="M24,29 L34,29 M30,24 L35,29 L30,34"
-        fill="none" stroke="white" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- App icon is composited here at (12,14) 30×30 — see HEADER_OVERLAY -->
 
   <!-- Product name -->
   <text x="48" y="27"
@@ -136,21 +128,83 @@ const HEADER_SVG = `
 `;
 
 /**
- * macOS menu-bar tray icon — TEMPLATE image.
- * Transparent background + solid black glyph. macOS uses only the alpha channel
- * and auto-inverts it for light/dark menu bars, so a single asset stays visible
- * in both modes (the previous dark app icon was invisible on a dark menu bar).
- * 44×44 px = 2× of the 22 pt menu-bar height.
+ * macOS menu-bar tray icon — TEMPLATE image, derived from the app icon.
+ *
+ * A template image carries no colour: macOS reads only its alpha channel and
+ * paints the opaque pixels in the menu-bar's text colour (black on a light bar,
+ * white on a dark one). So we turn the app icon's *white lark glyph* into the
+ * alpha channel and throw the blue plate away — feeding the colour icon in
+ * directly makes it invisible on a dark menu bar.
+ *
+ * Pipeline: crop to the glyph's bounding box → map luminance to alpha (the icon
+ * is cleanly bimodal, ~65 for the blue plate vs ~245 for the glyph) → downscale.
+ *
+ * tray-icon scales whatever we hand it to an 18 pt height, so the canvas size
+ * only sets the resolution ceiling: 88 px keeps it crisp on a 2× Retina bar.
  */
-const TRAY_TEMPLATE_SVG = `
-<svg width="44" height="44" xmlns="http://www.w3.org/2000/svg">
-  <polygon points="22,5 35,12.5 35,31.5 22,39 9,31.5 9,12.5"
-           fill="none" stroke="black" stroke-width="3.2"/>
-  <path d="M15,22 L27,22 M22,16 L29,22 L22,28"
-        fill="none" stroke="black" stroke-width="3.2"
-        stroke-linecap="round" stroke-linejoin="round"/>
-</svg>
-`;
+const TRAY_PX = 88;
+
+/** Luminance window mapped onto 0…255 alpha. Below LO → transparent, above HI → solid. */
+const GLYPH_LUMA_LO = 95;
+const GLYPH_LUMA_HI = 235;
+
+/** A pixel this bright is considered part of the glyph when measuring its bounds. */
+const GLYPH_BBOX_LUMA = 170;
+
+const luma = (r, g, b) => 0.299 * r + 0.587 * g + 0.114 * b;
+
+/**
+ * Render the app icon's glyph as an alpha-only black mask.
+ * @returns {Promise<Buffer>} PNG bytes, TRAY_PX × TRAY_PX
+ */
+async function renderTrayTemplate() {
+  const { data, info } = await sharp(APP_ICON)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const { width: w, height: h } = info;
+
+  // ── Locate the glyph so the menu bar isn't mostly icon padding ──────
+  let minX = w, minY = h, maxX = 0, maxY = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const o = (y * w + x) * 4;
+      if (data[o + 3] < 128) continue; // rounded-corner transparency
+      if (luma(data[o], data[o + 1], data[o + 2]) < GLYPH_BBOX_LUMA) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < minX || maxY < minY) {
+    throw new Error(`No glyph found in ${APP_ICON} — is it still a light mark on a dark plate?`);
+  }
+
+  // Square crop around the glyph, 6% breathing room.
+  const side = Math.round(Math.max(maxX - minX + 1, maxY - minY + 1) * 1.06);
+  const left = Math.round((minX + maxX) / 2 - side / 2);
+  const top = Math.round((minY + maxY) / 2 - side / 2);
+
+  // ── Luminance → alpha, at full resolution so the downscale antialiases it ──
+  const mask = Buffer.alloc(side * side * 4, 0); // RGB stays 0 = black
+  for (let y = 0; y < side; y++) {
+    for (let x = 0; x < side; x++) {
+      const sx = left + x;
+      const sy = top + y;
+      if (sx < 0 || sy < 0 || sx >= w || sy >= h) continue;
+      const o = (sy * w + sx) * 4;
+      const t = (luma(data[o], data[o + 1], data[o + 2]) - GLYPH_LUMA_LO) / (GLYPH_LUMA_HI - GLYPH_LUMA_LO);
+      const a = Math.max(0, Math.min(1, t)) * (data[o + 3] / 255);
+      mask[(y * side + x) * 4 + 3] = Math.round(a * 255);
+    }
+  }
+
+  return sharp(mask, { raw: { width: side, height: side, channels: 4 } })
+    .resize(TRAY_PX, TRAY_PX, { kernel: "lanczos3" })
+    .png()
+    .toBuffer();
+}
 
 /**
  * macOS DMG background.
@@ -191,21 +245,27 @@ const DMG_SVG = `
 </svg>
 `;
 
-// SVG tasks: rendered at 2× then resized to target BMP size for sharpness
+// SVG tasks: rendered at 2× then resized to target BMP size for sharpness.
+// `icon` places the app icon on the banner, in 1× banner coordinates.
 const TASKS = [
   {
     svg:    SIDEBAR_SVG,
     dest:   `${root}/src-tauri/installer/nsis-sidebar.bmp`,
     width:  164,
     height: 314,
+    icon:   { left: 50, top: 66, size: 64 },
   },
   {
     svg:    HEADER_SVG,
     dest:   `${root}/src-tauri/installer/nsis-header.bmp`,
     width:  150,
     height: 57,
+    icon:   { left: 12, top: 14, size: 30 },
   },
 ];
+
+/** Banner background — also what the icon's rounded corners get flattened onto. */
+const BANNER_BG = "#0f172a";
 
 /**
  * Write a 24-bit uncompressed BMP from raw RGB pixel data.
@@ -265,10 +325,23 @@ function writeBmp(dest, pixels, width, height) {
 (async () => {
   console.log("Preparing installer assets…");
 
-  for (const { svg, dest, width, height } of TASKS) {
-    // Render SVG → flatten alpha → resize → raw RGB (3 channels)
-    const { data } = await sharp(Buffer.from(svg))
-      .flatten({ background: "#0f172a" })
+  for (const { svg, dest, width, height, icon } of TASKS) {
+    // Rasterize the SVG at 2×, composite the app icon, then downscale: the
+    // extra resolution keeps the text and the icon's curves from stair-stepping.
+    const iconPx = icon.size * SCALE;
+    const iconBuf = await sharp(APP_ICON)
+      .resize(iconPx, iconPx, { kernel: "lanczos3" })
+      .toBuffer();
+
+    // Two passes: sharp always composites *after* resizing within one pipeline,
+    // which would drop the 2× icon onto the already-downscaled canvas.
+    const banner = await sharp(Buffer.from(svg), { density: 72 * SCALE })
+      .composite([{ input: iconBuf, left: icon.left * SCALE, top: icon.top * SCALE }])
+      .png()
+      .toBuffer();
+
+    const { data } = await sharp(banner)
+      .flatten({ background: BANNER_BG })
       .resize(width, height, { fit: "fill" })
       .raw()
       .toBuffer({ resolveWithObject: true });
@@ -279,9 +352,7 @@ function writeBmp(dest, pixels, width, height) {
   // ── macOS tray template icon (PNG, transparent, alpha-only) ────────────
   {
     const dest = `${root}/src-tauri/icons/tray-template.png`;
-    await sharp(Buffer.from(TRAY_TEMPLATE_SVG))
-      .png()
-      .toFile(dest);
+    writeFileSync(dest, await renderTrayTemplate());
     console.log(`  ✓  ${dest.replace(root, "")}`);
   }
 

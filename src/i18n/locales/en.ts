@@ -148,6 +148,7 @@ export default {
     sortDefault: "Default",
     sortLatency: "Latency",
     sortSpeed: "Speed",
+    columnsTip: "Show {n} per row",
     refresh: "Refresh",
     searchPlaceholder: "Search node name or server...",
     allTab: "All",

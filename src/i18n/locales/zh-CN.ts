@@ -149,6 +149,7 @@ export default {
     sortDefault: "默认",
     sortLatency: "延迟",
     sortSpeed: "速度",
+    columnsTip: "每行显示 {n} 个节点",
     refresh: "刷新",
     searchPlaceholder: "搜索节点名称或服务器...",
     allTab: "全部",

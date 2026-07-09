@@ -488,7 +488,8 @@ pub fn run() {
             // macOS menu-bar requires a monochrome *template* icon: it uses only the
             // alpha channel and auto-inverts with light/dark menu bars. The full-color
             // app icon (dark) was invisible on a dark menu bar — hence "no tray icon".
-            // Other platforms keep the colored window icon.
+            // tray-template.png is generated from the app icon by scripts/prepare-installer.js;
+            // don't hand-edit it. Other platforms keep the colored window icon.
             #[cfg(target_os = "macos")]
             let tray_icon = tauri::image::Image::from_bytes(
                 include_bytes!("../icons/tray-template.png")

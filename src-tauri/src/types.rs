@@ -106,6 +106,9 @@ pub struct AppConfig {
     pub tun_enabled: bool,
     pub log_level: String,
     pub theme: String,
+    /// UI density: "standard" or "compact"
+    #[serde(default = "default_density")]
+    pub density: String,
     pub language: String,
     pub selected_subscription: Option<String>,
     pub active_nodes: std::collections::HashMap<String, String>,
@@ -182,6 +185,10 @@ fn default_update_channel() -> String {
     "stable".to_string()
 }
 
+fn default_density() -> String {
+    "standard".to_string()
+}
+
 fn default_auto_test_url() -> String {
     "https://www.gstatic.com/generate_204".to_string()
 }
@@ -216,6 +223,7 @@ impl Default for AppConfig {
             tun_enabled: false,
             log_level: "info".to_string(),
             theme: "system".to_string(),
+            density: default_density(),
             language: "zh-CN".to_string(),
             selected_subscription: None,
             active_nodes: std::collections::HashMap::new(),

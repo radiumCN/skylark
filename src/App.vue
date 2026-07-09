@@ -25,10 +25,22 @@ function applyTheme(theme: string) {
 
 watch(() => store.config.theme, applyTheme, { immediate: true });
 
+function applyDensity(density: string) {
+  const html = document.documentElement;
+  if (density === "compact") {
+    html.setAttribute("data-density", "compact");
+  } else {
+    html.removeAttribute("data-density");
+  }
+}
+
+watch(() => store.config.density, applyDensity, { immediate: true });
+
 onMounted(async () => {
   await store.init();
   // Re-apply after config loads from backend
   applyTheme(store.config.theme);
+  applyDensity(store.config.density);
 });
 </script>
 

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
-import { Gauge, RefreshCw, CheckCircle, Signal, Zap, ArrowUpDown, Plus, Trash2, Pencil, Layers, ChevronDown } from "@lucide/vue";
+import { Gauge, RefreshCw, CheckCircle, Signal, Zap, ArrowUpDown, Plus, Trash2, Pencil, Layers, ChevronDown, Columns3 } from "@lucide/vue";
 import { useAppStore } from "../stores/app";
 import { useFeedbackStore } from "../stores/feedback";
 import { useI18n } from "vue-i18n";
@@ -27,7 +27,12 @@ const sortBy = ref<"none" | "latency" | "speed">(
 );
 const search = ref("");
 
+const COLUMN_OPTIONS = [1, 2];
+const savedColumns = Number(localStorage.getItem("nodes_columns"));
+const columns = ref(COLUMN_OPTIONS.includes(savedColumns) ? savedColumns : 1);
+
 watch(sortBy, (v) => localStorage.setItem("nodes_sort", v));
+watch(columns, (v) => localStorage.setItem("nodes_columns", String(v)));
 
 function validateSubFilter() {
   const savedSub = filterSubId.value;
@@ -248,6 +253,21 @@ const autoNowName = computed(() => store.activeNodeNow);
             </div>
           </div>
 
+          <!-- Column-count selector -->
+          <div class="sort-wrap">
+            <Columns3 :size="13" class="sort-icon" />
+            <div class="segmented">
+              <button
+                v-for="c in COLUMN_OPTIONS"
+                :key="c"
+                class="segmented__item"
+                :class="{ active: columns === c }"
+                :title="t('nodes.columnsTip', { n: c })"
+                @click="columns = c"
+              >{{ c }}</button>
+            </div>
+          </div>
+
           <button class="btn btn-ghost" @click="manualRefresh" :disabled="refreshing">
             <RefreshCw :size="14" :class="{ spin: refreshing }" />
             {{ t("nodes.refresh") }}
@@ -394,7 +414,7 @@ const autoNowName = computed(() => store.activeNodeNow);
     />
 
     <!-- Node List -->
-    <div class="node-list">
+    <div class="node-list" :style="{ '--node-cols': columns }">
       <!-- Dynamic auto-select (urltest) group — global or per-subscription -->
       <div
         v-if="showAutoCard"
@@ -531,7 +551,14 @@ const autoNowName = computed(() => store.activeNodeNow);
   background: var(--color-primary-soft); color: var(--color-primary);
 }
 
-.node-list { display: flex; flex-direction: column; gap: 6px; }
+/* Column count is user-chosen (1–2) and fed in as --node-cols. */
+.node-list {
+  display: grid;
+  grid-template-columns: repeat(var(--node-cols, 1), minmax(0, 1fr));
+  gap: 6px;
+}
+/* The auto-select card is a single logical entry — keep it on its own full row. */
+.auto-item { grid-column: 1 / -1; }
 .node-skel-list { display: flex; flex-direction: column; gap: 6px; }
 .node-skel {
   display: flex;
@@ -691,6 +718,8 @@ const autoNowName = computed(() => store.activeNodeNow);
   .filters { flex-direction: column; align-items: stretch; }
   .search-input { max-width: none; flex: 1 1 auto; }
   .sort-wrap { flex-wrap: wrap; }
+  /* Ignore the saved column count — multi-column cards are unreadable this narrow. */
+  .node-list { grid-template-columns: 1fr; }
   .editor-row { flex-direction: column; }
   .editor-type { max-width: none; }
 }

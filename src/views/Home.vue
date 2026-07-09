@@ -310,7 +310,9 @@ onUnmounted(() => {
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0;
   position: relative;
-  transition: all 0.25s ease;
+  /* Not `all`: hero-pop drives transform, and a transition on the same property
+     fights the keyframes as the animation settles. */
+  transition: background 0.25s ease, color 0.25s ease, box-shadow 0.25s ease;
 }
 .hero-icon.off { background: var(--color-neutral); color: var(--color-text-muted); }
 .hero-icon.on {
@@ -319,13 +321,18 @@ onUnmounted(() => {
   box-shadow: 0 4px 14px var(--color-success-glow);
   animation: hero-pop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-/* Soft breathing ring while connected */
+/* Soft breathing ring while connected. The ring box sits 6px outside the icon,
+   so its radius must be the icon's + 6px to stay concentric — `inherit` would
+   reuse the icon's radius on a larger box and pinch the corners.
+   Solid success + keyframe opacity: --color-success-glow is already 40% alpha,
+   and multiplying that by the keyframe opacity left the ring near-invisible on
+   the light theme's #f2f3f9 background. */
 .hero-icon.on::after {
   content: "";
   position: absolute;
   inset: -6px;
-  border-radius: inherit;
-  border: 2px solid var(--color-success-glow);
+  border-radius: calc(var(--radius-lg) + 6px);
+  border: 2px solid var(--color-success);
   animation: hero-ring 2.6s ease-out infinite;
 }
 @keyframes hero-pop {
@@ -333,9 +340,11 @@ onUnmounted(() => {
   60% { transform: scale(1.07); }
   100% { transform: scale(1); }
 }
+/* Starts at rest (concentric, hugging the icon) and expands outward; the tail
+   holds at opacity 0 so each pulse is followed by a beat of stillness. */
 @keyframes hero-ring {
-  0% { opacity: 0.6; transform: scale(0.92); }
-  70%, 100% { opacity: 0; transform: scale(1.15); }
+  0% { opacity: 0.45; transform: scale(1); }
+  70%, 100% { opacity: 0; transform: scale(1.18); }
 }
 .hero-main { flex: 1; min-width: 0; }
 .hero-label {

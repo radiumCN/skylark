@@ -76,6 +76,7 @@ export interface AppConfig {
   tun_enabled: boolean;
   log_level: string;
   theme: string;
+  density: string;
   language: string;
   selected_subscription?: string;
   active_nodes: Record<string, string>;
@@ -120,6 +121,7 @@ export const useAppStore = defineStore("app", () => {
     tun_enabled: false,
     log_level: "info",
     theme: "system",
+    density: "standard",
     // Placeholder until fetchConfig() loads the backend value. Detect from the OS so the
     // App.vue immediate locale watch matches the first paint instead of forcing zh-CN.
     language: detectLocale(),

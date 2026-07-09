@@ -27,7 +27,7 @@ const sortBy = ref<"none" | "latency" | "speed">(
 );
 const search = ref("");
 
-const COLUMN_OPTIONS = [1, 2, 3, 4];
+const COLUMN_OPTIONS = [1, 2];
 const savedColumns = Number(localStorage.getItem("nodes_columns"));
 const columns = ref(COLUMN_OPTIONS.includes(savedColumns) ? savedColumns : 1);
 
@@ -551,7 +551,7 @@ const autoNowName = computed(() => store.activeNodeNow);
   background: var(--color-primary-soft); color: var(--color-primary);
 }
 
-/* Column count is user-chosen (1–4) and fed in as --node-cols. */
+/* Column count is user-chosen (1–2) and fed in as --node-cols. */
 .node-list {
   display: grid;
   grid-template-columns: repeat(var(--node-cols, 1), minmax(0, 1fr));

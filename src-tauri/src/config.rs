@@ -82,7 +82,7 @@ pub fn ensure_dirs() -> Result<()> {
 /// The temp-then-rename keeps the previous good file intact until the new one is complete.
 /// `fs::rename` replaces the destination on both Windows (MoveFileEx REPLACE_EXISTING) and
 /// Unix, so this is a safe cross-platform swap.
-fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &std::path::Path, data: &[u8]) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, data)?;
     // These files hold node passwords / secrets. On Unix, restrict them to the owner (0600)
@@ -113,7 +113,10 @@ pub fn api_secret() -> String {
             }
             let secret = uuid::Uuid::new_v4().simple().to_string();
             let _ = ensure_dirs();
-            let _ = fs::write(&path, &secret);
+            // This secret is the only guard on the local Clash API (`external_controller`),
+            // so it must be owner-only (0600 on Unix) — write it through the atomic helper
+            // rather than a bare, world-readable `fs::write`.
+            let _ = write_atomic(&path, secret.as_bytes());
             secret
         })
         .clone()

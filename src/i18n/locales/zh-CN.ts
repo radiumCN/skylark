@@ -69,6 +69,7 @@ export default {
   subscriptions: {
     title: "订阅管理",
     refreshAll: "全部更新",
+    refreshAllFailed: "{count} 个订阅更新失败",
     updating: "更新中...",
     add: "添加订阅",
     empty: "暂无订阅",
@@ -367,6 +368,8 @@ export default {
     rememberProxyStateDesc: "开机自启动时自动恢复上次的代理状态（系统代理 / TUN 模式）",
     logToFile: "日志写入文件",
     logToFileDesc: "将内核日志持续写入 logs/skylark-日期.log，崩溃后仍可查看；下次启动代理时生效",
+    openLogDir: "打开目录",
+    openLogDirFailed: "打开日志目录失败：{e}",
     enableGlobalShortcuts: "全局快捷键",
     enableGlobalShortcutsDesc: "Ctrl/Cmd+Shift+P 切换系统代理 · +Shift+T 切换 TUN · +Shift+R 切换模式",
     portConfig: "端口配置",

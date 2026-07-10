@@ -65,6 +65,24 @@ fn normalize_sha256_digest(raw: &str) -> Option<String> {
     }
 }
 
+/// Whether a download URL points at a GitHub-owned host. Defense-in-depth: even if a caller
+/// (e.g. XSS driving `cmd_download_app_update`) supplies an arbitrary HTTPS URL, the binary /
+/// installer we download and then execute can only come from GitHub's release infrastructure,
+/// not an attacker's server. Release assets live on github.com and redirect to
+/// *.githubusercontent.com; metadata is on api.github.com.
+fn is_trusted_download_host(url: &str) -> bool {
+    match reqwest::Url::parse(url) {
+        Ok(u) => matches!(
+            u.host_str(),
+            Some(h) if h == "github.com"
+                || h == "api.github.com"
+                || h == "githubusercontent.com"
+                || h.ends_with(".githubusercontent.com")
+        ),
+        Err(_) => false,
+    }
+}
+
 /// The sing-box release asset matching the platform we are currently running on.
 /// sing-box publishes one archive per OS/arch on its GitHub releases, e.g.
 ///   sing-box-1.x.y-windows-amd64.zip   → sing-box.exe
@@ -152,7 +170,7 @@ fn save_cache(release: &ReleaseInfo) {
         release: release.clone(),
     };
     if let Ok(data) = serde_json::to_string_pretty(&cache) {
-        let _ = std::fs::write(cache_path(), data);
+        let _ = crate::config::write_atomic(&cache_path(), data.as_bytes());
     }
 }
 
@@ -283,6 +301,18 @@ pub async fn download_singbox(
     if !download_url.starts_with("https://") {
         return Err(anyhow!("拒绝非 HTTPS 下载地址：{}", download_url));
     }
+    // The binary we download here is later executed (and under TUN, as root). Constrain the
+    // source to GitHub so a caller-supplied URL can't point at an attacker's host.
+    if !is_trusted_download_host(&download_url) {
+        return Err(anyhow!("下载地址不在受信任的 GitHub 域名内，已拒绝：{}", download_url));
+    }
+    // Fail CLOSED: require a valid SHA-256 up front. Previously a missing/None digest silently
+    // skipped verification, so an attacker who could influence the release metadata could just
+    // omit the digest to disable the check entirely. No digest → no install.
+    let expected = expected_sha256
+        .as_deref()
+        .and_then(normalize_sha256_digest)
+        .ok_or_else(|| anyhow!("该版本缺少有效的 SHA-256 校验值，已拒绝下载（避免安装未经校验的内核）"))?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .user_agent(concat!("skylark/", env!("CARGO_PKG_VERSION")))
@@ -345,7 +375,8 @@ pub async fn download_singbox(
 
     // Verify integrity against the release's published SHA-256 before trusting the bytes.
     // A mismatch means a corrupted or tampered download — discard it rather than install.
-    if let Some(expected) = expected_sha256.as_deref().and_then(normalize_sha256_digest) {
+    // `expected` is guaranteed present (resolved fail-closed at the top of this function).
+    {
         let actual = sha256_hex(&archive_data);
         if actual != expected {
             let _ = std::fs::remove_file(&archive_path);
@@ -606,7 +637,7 @@ fn save_app_cache(channel: &str, release: &AppReleaseInfo) {
         release: release.clone(),
     };
     if let Ok(data) = serde_json::to_string_pretty(&cache) {
-        let _ = std::fs::write(app_cache_path(channel), data);
+        let _ = crate::config::write_atomic(&app_cache_path(channel), data.as_bytes());
     }
 }
 
@@ -822,6 +853,17 @@ pub async fn download_and_install_app(
     if !download_url.starts_with("https://") {
         return Err(anyhow!("拒绝非 HTTPS 下载地址：{}", download_url));
     }
+    // The installer we download here is executed with the running app's privileges. Constrain
+    // the source to GitHub so a caller-supplied URL can't fetch an attacker's executable.
+    if !is_trusted_download_host(&download_url) {
+        return Err(anyhow!("下载地址不在受信任的 GitHub 域名内，已拒绝：{}", download_url));
+    }
+    // Fail CLOSED: require a valid SHA-256 before downloading. A missing digest previously
+    // skipped verification entirely, so running an unverified installer must be impossible.
+    let expected = expected_sha256
+        .as_deref()
+        .and_then(normalize_sha256_digest)
+        .ok_or_else(|| anyhow!("该版本缺少有效的 SHA-256 校验值，已取消更新（避免运行未经校验的安装包）"))?;
     // Bypass system proxy (which points to sing-box itself) to avoid circular dependency.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
@@ -838,11 +880,18 @@ pub async fn download_and_install_app(
     let mut downloaded: u64 = 0;
 
     let temp_dir = std::env::temp_dir();
-    let file_name = download_url
-        .split('/')
-        .last()
-        .unwrap_or("skylark-setup.exe")
-        .to_string();
+    // Derive the installer filename from the URL's last segment, but never trust it as a path:
+    // reject any separators / traversal so a crafted URL can't write outside the temp dir.
+    let raw_name = download_url.split('/').last().unwrap_or("");
+    let file_name = if raw_name.is_empty()
+        || raw_name.contains('/')
+        || raw_name.contains('\\')
+        || raw_name.contains("..")
+    {
+        "skylark-setup.exe".to_string()
+    } else {
+        raw_name.to_string()
+    };
     let installer_path = temp_dir.join(&file_name);
 
     let mut file = tokio::fs::File::create(&installer_path).await
@@ -871,8 +920,9 @@ pub async fn download_and_install_app(
 
     // Verify the installer's integrity against the release's published SHA-256 BEFORE
     // launching it. Running an unverified installer is the highest-risk step in the whole
-    // app, so a mismatch (corruption / tampering / MITM) must abort the update.
-    if let Some(expected) = expected_sha256.as_deref().and_then(normalize_sha256_digest) {
+    // app, so a mismatch (corruption / tampering / MITM) must abort the update. `expected` is
+    // guaranteed present (resolved fail-closed at the top of this function).
+    {
         let bytes = std::fs::read(&installer_path)?;
         let actual = sha256_hex(&bytes);
         if actual != expected {

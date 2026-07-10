@@ -68,6 +68,7 @@ export default {
   subscriptions: {
     title: "Subscriptions",
     refreshAll: "Update All",
+    refreshAllFailed: "{count} subscription(s) failed to update",
     updating: "Updating...",
     add: "Add Subscription",
     empty: "No subscriptions yet",
@@ -366,6 +367,8 @@ export default {
     rememberProxyStateDesc: "Automatically restore the last proxy state (system proxy / TUN mode) on startup",
     logToFile: "Write Logs to File",
     logToFileDesc: "Continuously write kernel logs to logs/skylark-date.log, viewable after a crash; takes effect on the next proxy start",
+    openLogDir: "Open Folder",
+    openLogDirFailed: "Failed to open log folder: {e}",
     enableGlobalShortcuts: "Global Hotkeys",
     enableGlobalShortcutsDesc: "Ctrl/Cmd+Shift+P toggle system proxy · +Shift+T toggle TUN · +Shift+R cycle mode",
     portConfig: "Port Configuration",

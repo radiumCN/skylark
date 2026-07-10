@@ -147,20 +147,35 @@ function isProxy(chains: string[]): boolean {
   return label !== "direct" && label !== "block";
 }
 
+// Ids the user optimistically closed. A poll issued BEFORE the close can resolve AFTER it and
+// would otherwise re-add the closed row for up to one interval; filter these out until the
+// backend stops reporting them (then forget them). Also guards against overlapping polls.
+let fetching = false;
+const recentlyClosed = new Set<string>();
+
 async function fetchConnections() {
+  if (fetching) return;
+  fetching = true;
   loading.value = true;
   try {
-    connections.value = await invoke<ConnectionInfo[]>("cmd_get_connections");
+    const list = await invoke<ConnectionInfo[]>("cmd_get_connections");
+    const present = new Set(list.map((c) => c.id));
+    for (const id of recentlyClosed) {
+      if (!present.has(id)) recentlyClosed.delete(id);
+    }
+    connections.value = list.filter((c) => !recentlyClosed.has(c.id));
   } catch {
     connections.value = [];
   } finally {
     loading.value = false;
+    fetching = false;
   }
 }
 
 async function closeConnection(id: string) {
   try {
     await invoke("cmd_close_connection", { id });
+    recentlyClosed.add(id);
     connections.value = connections.value.filter((c) => c.id !== id);
   } catch {
     // Ignore — the connection may have already closed; next poll reconciles.
@@ -170,6 +185,7 @@ async function closeConnection(id: string) {
 async function closeAll() {
   try {
     await invoke("cmd_close_all_connections");
+    connections.value.forEach((c) => recentlyClosed.add(c.id));
     connections.value = [];
   } catch {
     // Ignore — next poll reconciles state.

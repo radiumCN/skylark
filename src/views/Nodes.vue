@@ -96,15 +96,27 @@ async function saveGroup() {
   } else {
     groups.push({ id: crypto.randomUUID(), name, group_type: groupForm.value.group_type, nodes: [...groupForm.value.nodes] });
   }
-  await store.saveProxyGroups(groups);
-  showGroupEditor.value = false;
+  try {
+    await store.saveProxyGroups(groups);
+    showGroupEditor.value = false;
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 async function deleteGroup(id: string) {
   if (!(await fb.confirm({ message: t("nodes.confirmDeleteGroup"), danger: true }))) return;
-  await store.saveProxyGroups(store.proxyGroups.filter((g) => g.id !== id));
+  try {
+    await store.saveProxyGroups(store.proxyGroups.filter((g) => g.id !== id));
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 async function useGroup(name: string) {
-  await store.setAutoNode(name);
+  try {
+    await store.setAutoNode(name);
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 
 const nodesForSub = computed(() => {
@@ -194,13 +206,21 @@ async function testOne(nodeId: string) {
 }
 
 async function selectNode(nodeId: string) {
-  await store.setActiveNode(nodeId);
+  try {
+    await store.setActiveNode(nodeId);
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 
 // Switch to a dynamic urltest group (core continuously picks the fastest node).
 // No arg = global "auto"; pass a subscription id for that subscription's group.
 async function selectAuto(subId?: string) {
-  await store.setAutoNode(subId ? `auto-${subId}` : undefined);
+  try {
+    await store.setAutoNode(subId ? `auto-${subId}` : undefined);
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 
 // Force an immediate re-test of the current view's auto group.

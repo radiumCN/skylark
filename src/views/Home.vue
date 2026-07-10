@@ -28,12 +28,16 @@ async function fetchSystemProxy() {
 const systemProxyOn = computed(() => {
   if (store.connecting === "system") return true;
   if (store.connecting === "tun" || store.connecting === "off") return false;
-  return store.status.running && systemProxyEnabled.value && !store.config.tun_enabled;
+  // Reflect the real runtime state: system proxy on AND the core is not actually in TUN.
+  // (tun_active is the backend truth; config.tun_enabled is only a persisted preference.)
+  return store.status.running && systemProxyEnabled.value && store.status.tun_active !== true;
 });
 const tunOn = computed(() => {
   if (store.connecting === "tun") return true;
   if (store.connecting === "system" || store.connecting === "off") return false;
-  return store.status.running && store.config.tun_enabled;
+  // Backend truth — the core is actually running in TUN mode — not the persisted preference,
+  // which would otherwise light this up even when no tunnel was ever established.
+  return store.status.running && store.status.tun_active === true;
 });
 
 // What the proxy-status card shows as the active routing method. With the persistent

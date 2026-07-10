@@ -140,6 +140,8 @@ async function updateSub(id: string) {
   updatingId.value = id;
   try {
     await store.updateSubscription(id);
+  } catch (e) {
+    fb.toastError(String(e));
   } finally {
     updatingId.value = null;
   }
@@ -156,7 +158,12 @@ async function refreshAll() {
   if (store.subscriptions.length === 0) return;
   refreshingAll.value = true;
   try {
-    await Promise.allSettled(store.subscriptions.map((s) => store.updateSubscription(s.id)));
+    const { failed } = await store.refreshAllSubscriptions();
+    if (failed > 0) {
+      fb.toastError(t("subscriptions.refreshAllFailed", { count: failed }));
+    }
+  } catch (e) {
+    fb.toastError(String(e));
   } finally {
     refreshingAll.value = false;
   }
@@ -277,11 +284,19 @@ function formatNextUpdate(sub: { last_update?: string; update_interval: number }
 }
 
 async function toggleAutoUpdate(id: string, currentAutoUpdate: boolean, interval: number) {
-  await store.saveSubscriptionSettings(id, !currentAutoUpdate, interval);
+  try {
+    await store.saveSubscriptionSettings(id, !currentAutoUpdate, interval);
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 
 async function changeInterval(id: string, autoUpdate: boolean, interval: number) {
-  await store.saveSubscriptionSettings(id, autoUpdate, interval);
+  try {
+    await store.saveSubscriptionSettings(id, autoUpdate, interval);
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 </script>
 

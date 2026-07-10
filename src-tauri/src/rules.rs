@@ -421,7 +421,7 @@ pub fn save_rules(rules: &[RouteRule]) -> Result<()> {
     config::ensure_dirs()?;
     let path = config::app_data_dir().join("rules.json");
     let data = serde_json::to_string_pretty(rules)?;
-    std::fs::write(path, data)?;
+    config::write_atomic(&path, data.as_bytes())?;
     Ok(())
 }
 
@@ -468,7 +468,7 @@ pub fn save_rule_providers(providers: &[RuleProvider]) -> Result<()> {
     config::ensure_dirs()?;
     let path = config::app_data_dir().join("rule_providers.json");
     let data = serde_json::to_string_pretty(providers)?;
-    std::fs::write(path, data)?;
+    config::write_atomic(&path, data.as_bytes())?;
     Ok(())
 }
 

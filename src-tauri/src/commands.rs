@@ -30,6 +30,28 @@ pub struct AppState {
     pub switching: std::sync::atomic::AtomicBool,
 }
 
+/// RAII guard for [`AppState::switching`]. [`SwitchGuard::acquire`] test-and-sets the flag,
+/// returning `None` if a switch is already in flight; the returned guard ALWAYS clears the
+/// flag on drop — including on an early return or a panic while the switch future is awaited —
+/// so a wedged switch can never permanently block every future mode toggle.
+pub struct SwitchGuard<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl<'a> SwitchGuard<'a> {
+    pub fn acquire(flag: &'a std::sync::atomic::AtomicBool) -> Option<Self> {
+        if flag.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            None
+        } else {
+            Some(SwitchGuard(flag))
+        }
+    }
+}
+
+impl Drop for SwitchGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Holds cloned handles to tray check-menu items so commands can update them.
 pub struct TrayState {
     pub sys_proxy_item: Mutex<Option<tauri::menu::CheckMenuItem<tauri::Wry>>>,
@@ -132,8 +154,8 @@ async fn ensure_core_inner(
     );
     let config_path = config::singbox_config_path();
     config::ensure_dirs().map_err(|e| e.to_string())?;
-    std::fs::write(&config_path, serde_json::to_string_pretty(&singbox_cfg).unwrap())
-        .map_err(|e| e.to_string())?;
+    let cfg_json = serde_json::to_string_pretty(&singbox_cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&config_path, cfg_json).map_err(|e| e.to_string())?;
 
     // Restart: the running instance uses the PREVIOUS tun setting, so a graceful
     // (adapter-cleanup) shutdown is only needed when it was previously in TUN mode.
@@ -364,6 +386,7 @@ pub fn cmd_get_singbox_status(
     let s = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner());
     SingboxStatus {
         running: s.running,
+        tun_active: s.running && s.tun_mode,
         uptime: s.start_time.map(|t| t.elapsed().as_secs()),
         pid: s.pid,
         version: s.version.clone(),
@@ -390,6 +413,36 @@ pub fn cmd_export_logs(state: State<'_, AppState>) -> Result<String, String> {
     let path = dir.join(filename);
     std::fs::write(&path, logs.join("\n")).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
+}
+
+/// Return the path the frontend should reveal to land the user in the log directory
+/// (`app_data_dir/logs/`). Finding it by hand is easy to describe on Windows but buried on
+/// macOS (~/Library/Application Support/Skylark/logs), hence a one-click jump in Settings.
+///
+/// Prefers the most recently modified `.log` FILE inside the directory: `revealItemInDir`
+/// on a file opens the logs folder itself with that file selected, whereas revealing the
+/// directory only selects it in its PARENT. Falls back to the (freshly created, if needed)
+/// directory when no log file exists yet.
+#[tauri::command]
+pub fn cmd_get_log_dir_entry() -> Result<String, String> {
+    let dir = config::app_data_dir().join("logs");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let newest_log = std::fs::read_dir(&dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            e.path().extension().and_then(|x| x.to_str()) == Some("log")
+                && e.file_type().map(|t| t.is_file()).unwrap_or(false)
+        })
+        .max_by_key(|e| {
+            e.metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
+    let target = newest_log.map(|e| e.path()).unwrap_or(dir);
+    Ok(target.to_string_lossy().to_string())
 }
 
 // ─── Config backup / restore ────────────────────────────────────────
@@ -437,13 +490,29 @@ fn build_config_bundle(state: &AppState) -> Value {
 /// upgrade detection — and the frontend only ever holds a stale snapshot of them. A config
 /// save or import must therefore NOT overwrite them, or the "restore proxy on startup" state
 /// gets clobbered and recovery silently stops working. See docs/proxy-tun-lifecycle-plan.md.
-fn merge_runtime_fields(incoming: AppConfig, current: &AppConfig) -> AppConfig {
-    AppConfig {
+///
+/// `preserve_selection` additionally keeps `active_nodes` / `selected_subscription` from the
+/// backend. Those are selection state written by `cmd_set_active_node` / `cmd_set_auto_node`
+/// (and mirrored to the frontend via `fetchConfig`), NOT settings-form fields — a settings
+/// save carries a possibly-stale snapshot of them, and letting it win silently reverts the
+/// user's just-made node selection. A config IMPORT/restore, by contrast, must adopt the
+/// bundle's selection, so it passes `false`.
+fn merge_runtime_fields(
+    incoming: AppConfig,
+    current: &AppConfig,
+    preserve_selection: bool,
+) -> AppConfig {
+    let mut merged = AppConfig {
         last_proxy_running: current.last_proxy_running,
         last_system_proxy: current.last_system_proxy,
         last_app_version: current.last_app_version.clone(),
         ..incoming
+    };
+    if preserve_selection {
+        merged.active_nodes = current.active_nodes.clone();
+        merged.selected_subscription = current.selected_subscription.clone();
     }
+    merged
 }
 
 /// Apply a config bundle to both on-disk files and the in-memory `AppState`. Each section
@@ -456,7 +525,8 @@ fn apply_config_bundle(bundle: &Value, state: &AppState) -> Result<(), String> {
     if let Some(v) = bundle.get("app_config") {
         if let Ok(cfg) = serde_json::from_value::<AppConfig>(v.clone()) {
             let mut guard = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
-            let merged = merge_runtime_fields(cfg, &guard);
+            // Import/restore: adopt the bundle's selection state.
+            let merged = merge_runtime_fields(cfg, &guard, false);
             config::save_app_config(&merged).map_err(|e| e.to_string())?;
             *guard = merged;
         }
@@ -495,6 +565,45 @@ fn apply_config_bundle(bundle: &Value, state: &AppState) -> Result<(), String> {
                 let _ = config::save_subscription_content(id, s);
             }
         }
+    }
+
+    // An imported bundle may predate the `subscription_id` outbound key (or come from another
+    // install). Backfill ownership from the paired node and de-duplicate tags globally so the
+    // restored data is internally consistent before the next core start — mirrors the startup
+    // migration in `lib.rs`. Locks nodes then outbounds (the module-wide order).
+    {
+        let sub_order: Vec<String> = state
+            .subscriptions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|s| s.id.clone())
+            .collect();
+        let mut nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
+        let mut outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner());
+        if outbounds.iter().any(|ob| ob.get("subscription_id").is_none()) {
+            let owner: std::collections::HashMap<String, Option<String>> = nodes
+                .iter()
+                .map(|n| (n.name.clone(), n.subscription_id.clone()))
+                .collect();
+            for ob in outbounds.iter_mut() {
+                if ob.get("subscription_id").is_some() {
+                    continue;
+                }
+                let sid = ob
+                    .get("tag")
+                    .and_then(|t| t.as_str())
+                    .and_then(|t| owner.get(t))
+                    .and_then(|s| s.clone());
+                if let (Some(sid), Some(map)) = (sid, ob.as_object_mut()) {
+                    map.insert("subscription_id".into(), Value::String(sid));
+                }
+            }
+            outbounds.retain(|ob| ob.get("subscription_id").is_some());
+        }
+        subscription::dedupe_tags_globally(&mut nodes, &mut outbounds, &sub_order);
+        config::save_nodes(&nodes).map_err(|e| e.to_string())?;
+        config::save_outbounds(&outbounds).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -602,6 +711,40 @@ pub fn cmd_get_subscriptions(state: State<'_, AppState>) -> Vec<Subscription> {
     state.subscriptions.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+/// Replace one subscription's nodes + outbounds in the global lists, keyed by
+/// `subscription_id`, then globally de-duplicate tags so the generated sing-box config has
+/// unique outbound tags and each node's name still equals its outbound tag. Persists both.
+///
+/// Nodes and outbounds are ALWAYS added/removed together, keyed the same way — the previous
+/// code keyed nodes by `subscription_id` but outbounds by tag string, which desynced the two
+/// whenever two subscriptions shipped a node of the same name (kept two nodes but one
+/// outbound → a node silently dialing another subscription's server). `sub_order` is the
+/// subscriptions' stable display order, so cross-subscription collisions resolve to the same
+/// renamed tag on every refresh. Locks nodes then outbounds (the module-wide order).
+pub fn merge_subscription_entries(
+    state: &AppState,
+    sub_order: &[String],
+    id: &str,
+    nodes: Vec<ProxyNode>,
+    outbounds: Vec<Value>,
+) -> Result<(), String> {
+    let mut all_nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
+    let mut all_outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner());
+
+    all_nodes.retain(|n| n.subscription_id.as_deref() != Some(id));
+    all_nodes.extend(nodes);
+    all_outbounds.retain(|ob| {
+        ob.get("subscription_id").and_then(|v| v.as_str()) != Some(id)
+    });
+    all_outbounds.extend(outbounds);
+
+    subscription::dedupe_tags_globally(&mut all_nodes, &mut all_outbounds, sub_order);
+
+    config::save_nodes(&all_nodes).map_err(|e| e.to_string())?;
+    config::save_outbounds(&all_outbounds).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn cmd_add_subscription(
     name: String,
@@ -641,25 +784,13 @@ pub async fn cmd_add_subscription(
         group_by_region,
     };
 
-    {
+    let sub_order = {
         let mut subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         subs.push(sub.clone());
         config::save_subscriptions(&subs).map_err(|e| e.to_string())?;
-    }
-    {
-        let mut all_nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
-        all_nodes.retain(|n| n.subscription_id.as_deref() != Some(&id));
-        all_nodes.extend(nodes);
-        config::save_nodes(&all_nodes).map_err(|e| e.to_string())?;
-    }
-    {
-        let mut all_outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner());
-        all_outbounds.retain(|ob| {
-            !outbounds.iter().any(|new| new["tag"] == ob["tag"])
-        });
-        all_outbounds.extend(outbounds);
-        config::save_outbounds(&all_outbounds).map_err(|e| e.to_string())?;
-    }
+        subs.iter().map(|s| s.id.clone()).collect::<Vec<_>>()
+    };
+    merge_subscription_entries(&state, &sub_order, &id, nodes, outbounds)?;
 
     Ok(sub)
 }
@@ -704,25 +835,13 @@ pub async fn cmd_import_subscription_from_text(
         group_by_region,
     };
 
-    {
+    let sub_order = {
         let mut subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         subs.push(sub.clone());
         config::save_subscriptions(&subs).map_err(|e| e.to_string())?;
-    }
-    {
-        let mut all_nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
-        all_nodes.retain(|n| n.subscription_id.as_deref() != Some(&id));
-        all_nodes.extend(nodes);
-        config::save_nodes(&all_nodes).map_err(|e| e.to_string())?;
-    }
-    {
-        let mut all_outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner());
-        all_outbounds.retain(|ob| {
-            !outbounds.iter().any(|new| new["tag"] == ob["tag"])
-        });
-        all_outbounds.extend(outbounds);
-        config::save_outbounds(&all_outbounds).map_err(|e| e.to_string())?;
-    }
+        subs.iter().map(|s| s.id.clone()).collect::<Vec<_>>()
+    };
+    merge_subscription_entries(&state, &sub_order, &id, nodes, outbounds)?;
 
     Ok(sub)
 }
@@ -742,15 +861,21 @@ pub async fn cmd_update_subscription(
 
     let proxy_port = active_proxy_port(&state);
     let (content, userinfo) = fetch_url(&url, proxy_port).await.map_err(|e| e.to_string())?;
-    config::save_subscription_content(&id, &content).map_err(|e| e.to_string())?;
     let sub_type = subscription::detect_sub_type(&content, &url);
     let (nodes, outbounds) = subscription::parse_subscription(&content, &id)
         .map_err(|e| e.to_string())?;
     let (nodes, outbounds) = subscription::apply_node_filters(
         nodes, outbounds, include.as_deref(), exclude.as_deref(), group_by_region,
     );
+    // A successful fetch that parses to zero nodes (an error/notice page, an expired account,
+    // or an all-placeholder body) must not wipe the last-known working nodes or clobber the
+    // good cached content. Bail with no side effects; the existing set stays selectable.
+    if nodes.is_empty() {
+        return Err("订阅刷新未解析到任何节点，已保留原有节点".to_string());
+    }
+    config::save_subscription_content(&id, &content).map_err(|e| e.to_string())?;
 
-    let updated_sub = {
+    let (updated_sub, sub_order) = {
         let mut subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         let sub = subs.iter_mut()
             .find(|s| s.id == id)
@@ -766,28 +891,10 @@ pub async fn cmd_update_subscription(
         if userinfo.expire.is_some() { sub.expire = userinfo.expire; }
         let cloned = sub.clone();
         config::save_subscriptions(&subs).map_err(|e| e.to_string())?;
-        cloned
+        (cloned, subs.iter().map(|s| s.id.clone()).collect::<Vec<_>>())
     };
 
-    {
-        let mut all_nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
-        all_nodes.retain(|n| n.subscription_id.as_deref() != Some(&id));
-        all_nodes.extend(nodes);
-        config::save_nodes(&all_nodes).map_err(|e| e.to_string())?;
-    }
-    {
-        let mut all_outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner());
-        let new_tags: std::collections::HashSet<String> = outbounds.iter()
-            .filter_map(|ob| ob["tag"].as_str().map(|s| s.to_string()))
-            .collect();
-        all_outbounds.retain(|ob| {
-            ob["tag"].as_str()
-                .map(|t| !new_tags.contains(t))
-                .unwrap_or(true)
-        });
-        all_outbounds.extend(outbounds);
-        config::save_outbounds(&all_outbounds).map_err(|e| e.to_string())?;
-    }
+    merge_subscription_entries(&state, &sub_order, &id, nodes, outbounds)?;
 
     Ok(updated_sub)
 }
@@ -828,7 +935,7 @@ pub fn cmd_set_subscription_filters(
     );
     let node_count = nodes.len();
 
-    {
+    let sub_order = {
         let mut subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         let sub = subs.iter_mut()
             .find(|s| s.id == id)
@@ -838,24 +945,10 @@ pub fn cmd_set_subscription_filters(
         sub.group_by_region = group_by_region;
         sub.node_count = node_count;
         config::save_subscriptions(&subs).map_err(|e| e.to_string())?;
-    }
-    {
-        let mut all_nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
-        all_nodes.retain(|n| n.subscription_id.as_deref() != Some(&id));
-        all_nodes.extend(nodes);
-        config::save_nodes(&all_nodes).map_err(|e| e.to_string())?;
-    }
-    {
-        let mut all_outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner());
-        let new_tags: std::collections::HashSet<String> = outbounds.iter()
-            .filter_map(|ob| ob["tag"].as_str().map(|s| s.to_string()))
-            .collect();
-        all_outbounds.retain(|ob| {
-            ob["tag"].as_str().map(|t| !new_tags.contains(t)).unwrap_or(true)
-        });
-        all_outbounds.extend(outbounds);
-        config::save_outbounds(&all_outbounds).map_err(|e| e.to_string())?;
-    }
+        subs.iter().map(|s| s.id.clone()).collect::<Vec<_>>()
+    };
+
+    merge_subscription_entries(&state, &sub_order, &id, nodes, outbounds)?;
 
     Ok(node_count)
 }
@@ -871,19 +964,18 @@ pub fn cmd_delete_subscription(
         subs.retain(|s| s.id != id);
         config::save_subscriptions(&subs).map_err(|e| e.to_string())?;
     }
+    // Remove the subscription's nodes and outbounds together, both keyed by
+    // `subscription_id` (outbounds carry it too — see `subscription::parse_subscription`).
+    // No global re-dedup here: removing entries can never create a tag collision, and
+    // leaving surviving nodes' names untouched keeps active selection stable.
     {
         let mut nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
-        nodes.retain(|n| n.subscription_id.as_deref() != Some(&id));
-        config::save_nodes(&nodes).map_err(|e| e.to_string())?;
-    }
-    {
         let mut outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner());
+        nodes.retain(|n| n.subscription_id.as_deref() != Some(&id));
         outbounds.retain(|ob| {
-            ob.get("subscription_id")
-                .and_then(|v| v.as_str())
-                .map(|s| s != id)
-                .unwrap_or(true)
+            ob.get("subscription_id").and_then(|v| v.as_str()) != Some(id.as_str())
         });
+        config::save_nodes(&nodes).map_err(|e| e.to_string())?;
         config::save_outbounds(&outbounds).map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -1102,9 +1194,12 @@ pub async fn cmd_test_group_delay(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let (api_port, running, test_url, members) = {
-        let cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
-        let running = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).running;
+        // Lock order MUST be nodes → app_config (the order every other command that holds both
+        // uses, e.g. cmd_test_node_latency / cmd_set_active_node). Locking app_config first here
+        // created an ABBA deadlock with those commands under concurrent invocation.
         let nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
+        let running = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).running;
+        let cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
         let members: Vec<String> = if group == "auto" {
             nodes.iter().map(|n| n.name.clone()).collect()
         } else if let Some(sid) = group.strip_prefix("auto-") {
@@ -1240,8 +1335,8 @@ async fn rebuild_and_restart_core(
     );
     let config_path = config::singbox_config_path();
     config::ensure_dirs().map_err(|e| e.to_string())?;
-    std::fs::write(&config_path, serde_json::to_string_pretty(&singbox_cfg).unwrap())
-        .map_err(|e| e.to_string())?;
+    let cfg_json = serde_json::to_string_pretty(&singbox_cfg).map_err(|e| e.to_string())?;
+    std::fs::write(&config_path, cfg_json).map_err(|e| e.to_string())?;
 
     let (running, current_tun) = {
         let s = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner());
@@ -1283,6 +1378,11 @@ pub async fn cmd_set_auto_node(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let group = group.unwrap_or_else(|| "auto".to_string());
+    // Serialize the whole core rebuild through core_lock, like apply_connection_mode does.
+    // Without it, this stop+start races a concurrent connection-mode switch (or another auto
+    // switch): two uncoordinated cores fight over the Clash API port and the TUN adapter and
+    // the second fails its readiness probe. Held across the awaits below (async mutex).
+    let _core = state.core_lock.lock().await;
     {
         let mut nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
         for node in nodes.iter_mut() {
@@ -1382,7 +1482,8 @@ pub fn cmd_save_app_config(
         return Err("控制端口不能与代理端口相同".to_string());
     }
     let mut guard = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
-    let merged = merge_runtime_fields(new_config, &guard);
+    // Settings-form save: keep the live node selection, don't let a stale snapshot revert it.
+    let merged = merge_runtime_fields(new_config, &guard, true);
     config::save_app_config(&merged).map_err(|e| e.to_string())?;
     *guard = merged;
     Ok(())
@@ -2112,6 +2213,61 @@ pub(crate) fn active_proxy_port(state: &AppState) -> Option<u16> {
     running.then(|| state.app_config.lock().unwrap_or_else(|e| e.into_inner()).mixed_port)
 }
 
+/// Hard cap on a subscription response body. Airport subscriptions are at most a few KB;
+/// this bounds memory so a hostile/compromised host (or a MITM) can't stream gigabytes into
+/// `resp.text()` and OOM the process — a crash the unattended auto-updater would then repeat
+/// on every launch. Also caps the amplification from base64 / YAML-alias expansion.
+const MAX_SUBSCRIPTION_BYTES: usize = 8 * 1024 * 1024; // 8 MiB
+
+/// Summarize a reqwest error WITHOUT its `Display`, which embeds the request URL — and a
+/// subscription URL commonly carries a secret `token=`. Returns only the failure category
+/// so the message can be surfaced/logged without leaking credentials.
+fn fetch_err_summary(e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        "请求超时".to_string()
+    } else if e.is_connect() {
+        "连接失败".to_string()
+    } else if e.is_redirect() {
+        "重定向次数过多".to_string()
+    } else if e.is_body() || e.is_decode() {
+        "响应读取失败".to_string()
+    } else {
+        "网络请求失败".to_string()
+    }
+}
+
+/// Guard a user-supplied fetch URL before it hits the HTTP client: restrict the scheme to
+/// http/https (no `file://`, `gopher://`, …) and reject IP-literal hosts that point at the
+/// local machine or link-local metadata (e.g. the local Clash API port, or 169.254.169.254)
+/// to blunt SSRF. Hostnames and private-LAN literals are allowed so self-hosted airports on
+/// a LAN keep working.
+fn validate_fetch_url(url: &str) -> Result<(), anyhow::Error> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| anyhow!("订阅地址格式无效"))?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => return Err(anyhow!("不支持的协议 {}（仅允许 http/https）", other)),
+    }
+    if let Some(host) = parsed.host() {
+        use std::net::IpAddr;
+        let ip = match host {
+            url::Host::Ipv4(v4) => Some(IpAddr::V4(v4)),
+            url::Host::Ipv6(v6) => Some(IpAddr::V6(v6)),
+            url::Host::Domain(_) => None,
+        };
+        if let Some(ip) = ip {
+            let link_local = match ip {
+                IpAddr::V4(v4) => v4.is_link_local(),
+                // fe80::/10
+                IpAddr::V6(v6) => (v6.segments()[0] & 0xffc0) == 0xfe80,
+            };
+            if ip.is_loopback() || ip.is_unspecified() || link_local {
+                return Err(anyhow!("订阅地址指向受限的本机/元数据地址，已拒绝"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Fetch a subscription. Tries a DIRECT fetch first (most airport hosts are directly
 /// reachable, and this needs no working tunnel); if that fails and the core is running,
 /// retries THROUGH the local mixed inbound so hosts only reachable via the proxy
@@ -2131,6 +2287,7 @@ pub(crate) async fn fetch_url(url: &str, proxy_port: Option<u16>) -> Result<(Str
 /// One subscription fetch attempt. `proxy_port = None` forces a truly direct request
 /// (bypassing any env-var proxy); `Some(port)` routes through `http://127.0.0.1:<port>`.
 async fn fetch_url_via(url: &str, proxy_port: Option<u16>) -> Result<(String, SubUserinfo), anyhow::Error> {
+    validate_fetch_url(url)?;
     let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .user_agent(config::subscription_user_agent());
@@ -2139,7 +2296,7 @@ async fn fetch_url_via(url: &str, proxy_port: Option<u16>) -> Result<(String, Su
         None => builder.no_proxy(),
     };
     let client = builder.build()?;
-    let resp = client.get(url).send().await?;
+    let resp = client.get(url).send().await.map_err(|e| anyhow!("{}", fetch_err_summary(&e)))?;
     if !resp.status().is_success() {
         return Err(anyhow!("HTTP {}", resp.status()));
     }
@@ -2149,7 +2306,27 @@ async fn fetch_url_via(url: &str, proxy_port: Option<u16>) -> Result<(String, Su
         .and_then(|v| v.to_str().ok())
         .map(parse_userinfo)
         .unwrap_or_default();
-    let content = resp.text().await?;
+    // Reject an oversized body up front when the server declares its length…
+    if let Some(len) = resp.content_length() {
+        if len > MAX_SUBSCRIPTION_BYTES as u64 {
+            return Err(anyhow!("订阅内容过大（{} 字节），已拒绝", len));
+        }
+    }
+    // …and enforce the cap while streaming, since Content-Length may be absent or lie.
+    use futures_util::StreamExt;
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| anyhow!("{}", fetch_err_summary(&e)))?;
+        if buf.len() + chunk.len() > MAX_SUBSCRIPTION_BYTES {
+            return Err(anyhow!(
+                "订阅内容超过大小上限（{} MiB），已拒绝",
+                MAX_SUBSCRIPTION_BYTES / 1024 / 1024
+            ));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    let content = String::from_utf8_lossy(&buf).into_owned();
     Ok((content, userinfo))
 }
 
@@ -2174,6 +2351,31 @@ mod tests {
         assert_eq!(c2, None);
         assert_eq!(ci2, None);
         assert_eq!(is2, None);
+    }
+
+    #[test]
+    fn merge_runtime_fields_preserves_selection_only_on_save() {
+        let mut current = AppConfig::default();
+        current.last_proxy_running = true;
+        current.active_nodes.insert("proxy".into(), "香港01".into());
+        current.selected_subscription = Some("sub-a".into());
+
+        // A settings-form save carries a stale/empty selection snapshot; it must NOT win.
+        let mut incoming = AppConfig::default();
+        incoming.active_nodes.insert("proxy".into(), "STALE".into());
+        incoming.selected_subscription = None;
+
+        let saved = merge_runtime_fields(incoming.clone(), &current, true);
+        assert_eq!(saved.active_nodes.get("proxy").map(String::as_str), Some("香港01"));
+        assert_eq!(saved.selected_subscription.as_deref(), Some("sub-a"));
+        // Backend-owned lifecycle fields always come from `current`.
+        assert!(saved.last_proxy_running);
+
+        // An import/restore, by contrast, must adopt the bundle's selection.
+        let imported = merge_runtime_fields(incoming, &current, false);
+        assert_eq!(imported.active_nodes.get("proxy").map(String::as_str), Some("STALE"));
+        assert_eq!(imported.selected_subscription, None);
+        assert!(imported.last_proxy_running);
     }
 
     #[test]

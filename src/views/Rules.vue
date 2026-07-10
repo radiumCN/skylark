@@ -145,29 +145,52 @@ function matchSummary(rule: RouteRule): string {
 
 // ─── Actions ─────────────────────────────────────────────────────────
 
+// The per-rule mutation commands return the FULL rule list in the backend's stored order,
+// which is stale w.r.t. any unsaved drag/move reorder the user has done (order is only
+// persisted on "Save & Apply"). Re-apply the current local order by id so a toggle/delete/add
+// doesn't silently discard a pending reorder; rules the local list doesn't know (e.g. a
+// freshly added one) keep the backend's relative position at the end.
+function reconcileOrder(backendList: RouteRule[]): RouteRule[] {
+  const order = new Map(rules.value.map((r, i) => [r.id, i]));
+  const rank = (r: RouteRule) => (order.has(r.id) ? (order.get(r.id) as number) : Number.MAX_SAFE_INTEGER);
+  return [...backendList].sort((a, b) => rank(a) - rank(b));
+}
+
 async function load() {
   loading.value = true;
   try {
     rules.value = await invoke<RouteRule[]>("cmd_get_rules");
+  } catch (e) {
+    fb.toastError(String(e));
   } finally {
     loading.value = false;
   }
 }
 
 async function toggleRule(id: string) {
-  rules.value = await invoke<RouteRule[]>("cmd_toggle_rule", { id });
+  try {
+    rules.value = reconcileOrder(await invoke<RouteRule[]>("cmd_toggle_rule", { id }));
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 
 async function deleteRule(id: string) {
   if (!(await fb.confirm({ message: t("rules.confirmDeleteRule"), danger: true }))) return;
-  rules.value = await invoke<RouteRule[]>("cmd_delete_rule", { id });
-  if (expandedId.value === id) expandedId.value = null;
+  try {
+    rules.value = reconcileOrder(await invoke<RouteRule[]>("cmd_delete_rule", { id }));
+    if (expandedId.value === id) expandedId.value = null;
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 
 async function saveAll() {
   saving.value = true;
   try {
     await invoke("cmd_save_rules", { rules: rules.value });
+  } catch (e) {
+    fb.toastError(String(e));
   } finally {
     saving.value = false;
   }
@@ -175,7 +198,11 @@ async function saveAll() {
 
 async function resetToDefault() {
   if (!(await fb.confirm({ message: t("rules.confirmReset"), danger: true }))) return;
-  rules.value = await invoke<RouteRule[]>("cmd_reset_rules");
+  try {
+    rules.value = await invoke<RouteRule[]>("cmd_reset_rules");
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 
 async function applyPreset(preset: typeof presets[0]) {
@@ -194,7 +221,11 @@ async function applyPreset(preset: typeof presets[0]) {
     network: null,
     process_name: [],
   };
-  rules.value = await invoke<RouteRule[]>("cmd_add_rule", { rule });
+  try {
+    rules.value = reconcileOrder(await invoke<RouteRule[]>("cmd_add_rule", { rule }));
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 
 function resetNewRule() {
@@ -227,9 +258,13 @@ async function addRule() {
     process_name: splitInput(newProcessName.value),
   };
   if (!rule.name.trim()) return;
-  rules.value = await invoke<RouteRule[]>("cmd_add_rule", { rule });
-  showAddDialog.value = false;
-  resetNewRule();
+  try {
+    rules.value = reconcileOrder(await invoke<RouteRule[]>("cmd_add_rule", { rule }));
+    showAddDialog.value = false;
+    resetNewRule();
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 
 function moveUp(index: number) {
@@ -270,31 +305,47 @@ function onDragEnd() {
 
 // ─── Rule provider actions ───────────────────────────────────────────
 async function loadProviders() {
-  providers.value = await invoke<RuleProvider[]>("cmd_get_rule_providers");
+  try {
+    providers.value = await invoke<RuleProvider[]>("cmd_get_rule_providers");
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 
 async function addProvider() {
   const name = newProviderName.value.trim();
   const url = newProviderUrl.value.trim();
   if (!name || !url) return;
-  providers.value = await invoke<RuleProvider[]>("cmd_add_rule_provider", {
-    name,
-    url,
-    action: newProviderAction.value,
-  });
-  showProviderDialog.value = false;
-  newProviderName.value = "";
-  newProviderUrl.value = "";
-  newProviderAction.value = "proxy";
+  try {
+    providers.value = await invoke<RuleProvider[]>("cmd_add_rule_provider", {
+      name,
+      url,
+      action: newProviderAction.value,
+    });
+    showProviderDialog.value = false;
+    newProviderName.value = "";
+    newProviderUrl.value = "";
+    newProviderAction.value = "proxy";
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 
 async function deleteProvider(id: string) {
   if (!(await fb.confirm({ message: t("rules.confirmDeleteProvider"), danger: true }))) return;
-  providers.value = await invoke<RuleProvider[]>("cmd_delete_rule_provider", { id });
+  try {
+    providers.value = await invoke<RuleProvider[]>("cmd_delete_rule_provider", { id });
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 
 async function toggleProvider(id: string) {
-  providers.value = await invoke<RuleProvider[]>("cmd_toggle_rule_provider", { id });
+  try {
+    providers.value = await invoke<RuleProvider[]>("cmd_toggle_rule_provider", { id });
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 
 onMounted(() => {

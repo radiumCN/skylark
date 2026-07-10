@@ -250,6 +250,11 @@ impl Default for AppConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SingboxStatus {
     pub running: bool,
+    /// Whether the running core is ACTUALLY in TUN mode right now (`running && tun_mode`).
+    /// This is the authoritative runtime signal the UI must use for the "TUN on" indicator —
+    /// NOT the persisted `config.tun_enabled` preference, which is merely what the user last
+    /// ticked and does not imply a tunnel was ever established.
+    pub tun_active: bool,
     pub uptime: Option<u64>, // seconds
     pub pid: Option<u32>,
     pub version: Option<String>,

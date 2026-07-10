@@ -120,12 +120,32 @@ pub fn relaunch_as_admin() -> Result<()> {
 // launched via `sudo -n` and the GUI stays as the normal user. Updating the kernel later
 // requires re-running the install so the root-owned copy is refreshed.
 
-/// Absolute path of the root-owned sing-box used for TUN. Referenced verbatim by the
-/// sudoers rule, the `sudo -n` launch, and the pkill teardown — they must all agree.
+/// Absolute path of the root-owned sing-box used for TUN. Referenced by the pkill teardown
+/// and copied in by the install; the sudoers rule pins the WRAPPER below, never this binary
+/// directly (a direct grant would allow `sudo sing-box run -c /tmp/evil.json` → root runs an
+/// attacker config → local root escalation).
 #[cfg(target_os = "macos")]
 pub const TUN_ROOT_BIN: &str = "/Library/Skylark/sing-box";
+/// Root-owned, non-user-writable wrapper that is the ONLY thing the sudoers rule grants.
+/// It takes NO arguments and always runs a FIXED, root-owned config, so an attacker can
+/// neither pass an arbitrary config path nor an arbitrary sing-box subcommand to root.
+#[cfg(target_os = "macos")]
+pub const TUN_ROOT_RUN: &str = "/Library/Skylark/skylark-tun-run.sh";
+/// Root-owned config the wrapper actually runs (copied from the app-generated staging file
+/// and locked to root:wheel 0600 by the wrapper before launch).
+#[cfg(target_os = "macos")]
+const TUN_ROOT_CONFIG: &str = "/Library/Skylark/config.json";
 #[cfg(target_os = "macos")]
 const TUN_SUDOERS_PATH: &str = "/etc/sudoers.d/skylark";
+
+/// Reject any path that could break out of the shell quoting we interpolate it into (the
+/// install script and the wrapper). A hostile `$HOME` / `$TMPDIR` at launch is the vector:
+/// without this, a path containing a quote/`$`/backtick could inject commands into the
+/// root-run install script. Valid macOS app paths never contain these.
+#[cfg(target_os = "macos")]
+fn shell_safe_path(p: &str) -> bool {
+    !p.is_empty() && !p.contains(['"', '\'', '`', '$', '\\', '\n', '\r'])
+}
 
 /// The login user's short name. The GUI runs as this user; we must capture it HERE in the
 /// (non-elevated) GUI process — inside the elevated install script `whoami` would be `root`.
@@ -156,11 +176,16 @@ fn current_username() -> Option<String> {
 /// confirms both the binary's presence and that the NOPASSWD sudoers rule is active.
 #[cfg(target_os = "macos")]
 pub fn tun_service_installed() -> bool {
-    if !std::path::Path::new(TUN_ROOT_BIN).exists() {
+    if !std::path::Path::new(TUN_ROOT_BIN).exists()
+        || !std::path::Path::new(TUN_ROOT_RUN).exists()
+    {
         return false;
     }
+    // Confirm the NOPASSWD rule for the wrapper is active WITHOUT executing it (`sudo -l`
+    // only checks permission — running the wrapper would actually start TUN). `-n` never
+    // prompts, so this stays silent when the rule is missing.
     std::process::Command::new("sudo")
-        .args(["-n", TUN_ROOT_BIN, "version"])
+        .args(["-n", "-l", TUN_ROOT_RUN])
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
@@ -178,9 +203,21 @@ pub fn install_tun_service() -> Result<()> {
         return Err(anyhow!("未找到 sing-box 内核，无法安装 TUN 服务，请重新安装应用或在「设置」中下载内核"));
     }
     let src_str = src.to_string_lossy().to_string();
+    // The staging config the wrapper reads at every TUN start — the SAME path the app writes
+    // its generated config to (see singbox_config_path). Baked into the wrapper as a literal.
+    let stage_str = crate::config::singbox_config_path().to_string_lossy().to_string();
 
-    // `user` and the paths are baked into the script as literals; the sudoers heredoc uses a
-    // quoted delimiter so the shell performs no expansion on the line.
+    // These paths are interpolated into a root-run shell script; a hostile $HOME/$TMPDIR must
+    // not be able to inject commands. Reject anything with shell metacharacters.
+    if !shell_safe_path(&src_str) || !shell_safe_path(&stage_str) {
+        return Err(anyhow!("内核或配置路径包含非法字符，已中止安装"));
+    }
+
+    // The sudoers rule grants ONLY the argument-less wrapper (+ pkill), never the core binary
+    // directly — so root can never be handed an arbitrary config path or subcommand. The
+    // wrapper copies the app-generated config into a root-owned file (0600) and runs that.
+    // Both heredocs use a QUOTED delimiter so the outer shell performs no `$` expansion; the
+    // wrapper's own `$SRC`/`$DST` are written literally and expand only when the wrapper runs.
     let script = format!(
         "#!/bin/sh\n\
          set -e\n\
@@ -189,9 +226,22 @@ pub fn install_tun_service() -> Result<()> {
          chown root:wheel \"{bin}\"\n\
          chmod 755 \"{bin}\"\n\
          xattr -dr com.apple.quarantine \"{bin}\" 2>/dev/null || true\n\
+         cat > {run} <<'WRAP'\n\
+#!/bin/sh\n\
+set -e\n\
+SRC=\"{stage}\"\n\
+DST={config}\n\
+BIN={bin}\n\
+cp \"$SRC\" \"$DST\"\n\
+chown root:wheel \"$DST\"\n\
+chmod 600 \"$DST\"\n\
+exec \"$BIN\" run -c \"$DST\"\n\
+WRAP\n\
+         chown root:wheel {run}\n\
+         chmod 755 {run}\n\
          TMP=$(mktemp)\n\
          cat > \"$TMP\" <<'EOF'\n\
-         {user} ALL=(root) NOPASSWD: {bin}, /usr/bin/pkill -TERM -f {bin}, /usr/bin/pkill -KILL -f {bin}\n\
+         {user} ALL=(root) NOPASSWD: {run}, /usr/bin/pkill -TERM -f {bin}, /usr/bin/pkill -KILL -f {bin}\n\
          EOF\n\
          chmod 440 \"$TMP\"\n\
          if /usr/sbin/visudo -cf \"$TMP\" >/dev/null 2>&1; then\n\
@@ -204,6 +254,9 @@ pub fn install_tun_service() -> Result<()> {
          fi\n",
         src = src_str,
         bin = TUN_ROOT_BIN,
+        run = TUN_ROOT_RUN,
+        config = TUN_ROOT_CONFIG,
+        stage = stage_str,
         user = user,
         sudoers = TUN_SUDOERS_PATH,
     );
@@ -211,6 +264,10 @@ pub fn install_tun_service() -> Result<()> {
     let tmp_script = std::env::temp_dir().join("skylark-install-tun.sh");
     std::fs::write(&tmp_script, script).map_err(|e| anyhow!("无法写入安装脚本: {}", e))?;
     let tmp_str = tmp_script.to_string_lossy().to_string();
+    if !shell_safe_path(&tmp_str) {
+        let _ = std::fs::remove_file(&tmp_script);
+        return Err(anyhow!("临时脚本路径包含非法字符，已中止安装"));
+    }
 
     // Single-quote the script path inside the AppleScript command so spaces are handled.
     let osa = format!(
@@ -233,8 +290,10 @@ pub fn install_tun_service() -> Result<()> {
 #[cfg(target_os = "macos")]
 pub fn uninstall_tun_service() -> Result<()> {
     let script = format!(
-        "rm -f {sudoers}; rm -f {bin}; rmdir /Library/Skylark 2>/dev/null || true",
+        "rm -f {sudoers}; rm -f {run}; rm -f {config}; rm -f {bin}; rmdir /Library/Skylark 2>/dev/null || true",
         sudoers = TUN_SUDOERS_PATH,
+        run = TUN_ROOT_RUN,
+        config = TUN_ROOT_CONFIG,
         bin = TUN_ROOT_BIN,
     );
     let osa = format!(

@@ -117,7 +117,6 @@ async fn do_update_subscription(
     let proxy_port = crate::commands::active_proxy_port(&state);
     let (content, userinfo) = crate::commands::fetch_url(url, proxy_port).await?;
 
-    crate::config::save_subscription_content(id, &content)?;
     let sub_type = crate::subscription::detect_sub_type(&content, url);
     let (nodes, outbounds) = crate::subscription::parse_subscription(&content, id)?;
     // Apply the subscription's stored name filters / region grouping.
@@ -135,9 +134,16 @@ async fn do_update_subscription(
         exclude.as_deref(),
         group_by_region,
     );
+    // A background refresh that parses to zero nodes (error/notice page, expired account,
+    // all-placeholder body) must not wipe the last-known working nodes or clobber the good
+    // cached content. Bail; the previous set stays and the next interval retries.
+    if nodes.is_empty() {
+        anyhow::bail!("订阅刷新未解析到任何节点，已保留原有节点");
+    }
+    crate::config::save_subscription_content(id, &content)?;
     let node_count = nodes.len();
 
-    {
+    let sub_order = {
         let mut subs = state.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(sub) = subs.iter_mut().find(|s| s.id == id) {
             sub.sub_type = sub_type;
@@ -150,26 +156,11 @@ async fn do_update_subscription(
             if userinfo.expire.is_some() { sub.expire = userinfo.expire; }
         }
         crate::config::save_subscriptions(&subs)?;
-    }
-    {
-        let mut all_nodes = state.nodes.lock().unwrap_or_else(|e| e.into_inner());
-        all_nodes.retain(|n| n.subscription_id.as_deref() != Some(id));
-        all_nodes.extend(nodes);
-        crate::config::save_nodes(&all_nodes)?;
-    }
-    {
-        let mut all_outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner());
-        let new_tags: std::collections::HashSet<String> = outbounds.iter()
-            .filter_map(|ob| ob["tag"].as_str().map(|s| s.to_string()))
-            .collect();
-        all_outbounds.retain(|ob| {
-            ob["tag"].as_str()
-                .map(|t| !new_tags.contains(t))
-                .unwrap_or(true)
-        });
-        all_outbounds.extend(outbounds);
-        crate::config::save_outbounds(&all_outbounds)?;
-    }
+        subs.iter().map(|s| s.id.clone()).collect::<Vec<_>>()
+    };
+
+    crate::commands::merge_subscription_entries(&state, &sub_order, id, nodes, outbounds)
+        .map_err(|e| anyhow::anyhow!(e))?;
 
     Ok(node_count)
 }

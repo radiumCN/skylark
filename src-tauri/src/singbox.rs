@@ -254,13 +254,23 @@ async fn check_config(binary: &std::path::Path, config_path: &std::path::Path) -
 /// and killed — the common case (no orphan) returns immediately, saving ~400ms on every start.
 #[cfg(target_os = "windows")]
 async fn kill_orphan_singbox() -> bool {
-    // taskkill /F /IM sing-box.exe exits 0 when it killed at least one process,
-    // and non-zero (128) when no matching process exists. The caller waits for the bound
-    // port to actually free up (see wait_until_port_free) rather than a fixed sleep — a
-    // force-killed TUN core can hold the Clash API port for seconds while Windows tears
-    // down the Wintun driver, which a short fixed delay would race.
-    TokioCommand::new("taskkill")
-        .args(["/F", "/IM", "sing-box.exe"])
+    // Kill ONLY sing-box.exe instances launched from OUR own binary path, so a second,
+    // unrelated sing-box-based client running from a different location is never force-killed
+    // (the old `taskkill /IM sing-box.exe` killed every sing-box.exe on the machine). Our
+    // install path is stable across app versions, so this still reaps orphans left by a
+    // previous run/update. `taskkill /IM` can't filter by path, so query via CIM.
+    // Exit 0 (→ caller waits for the port to free) only when a matching process was killed.
+    let our_path = crate::updater::resolved_singbox_path()
+        .to_string_lossy()
+        .replace('\'', "''"); // escape single quotes for the PowerShell single-quoted string
+    let ps = format!(
+        "$p = @(Get-CimInstance Win32_Process -Filter \"Name='sing-box.exe'\" | \
+         Where-Object {{ $_.ExecutablePath -eq '{}' }}); \
+         if ($p.Count -gt 0) {{ $p | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}; exit 0 }} else {{ exit 1 }}",
+        our_path
+    );
+    TokioCommand::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
         .stdin(std::process::Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
         .output()
@@ -271,11 +281,16 @@ async fn kill_orphan_singbox() -> bool {
 
 #[cfg(not(target_os = "windows"))]
 async fn kill_orphan_singbox() -> bool {
-    // Match the core's invocation signature ("…/sing-box run -c …") rather than the bare
-    // name. The core is the only process ever launched with `run -c`, so this pattern
-    // targets exactly the orphaned core and never the GUI app itself.
+    // Match the core's FULL invocation — our own binary path followed by "run -c" — rather
+    // than the bare name or a generic "sing-box run -c" substring. This targets exactly the
+    // orphaned core we launched and never another sing-box client running from a different
+    // path (nor an unrelated process whose cmdline merely mentions sing-box).
+    let pattern = format!(
+        "{} run -c",
+        crate::updater::resolved_singbox_path().to_string_lossy()
+    );
     let killed = TokioCommand::new("pkill")
-        .args(["-f", "sing-box run -c"])
+        .args(["-f", &pattern])
         .output()
         .await
         .map(|o| o.status.success())
@@ -393,8 +408,12 @@ pub async fn start_singbox(
         // and all runs on Windows/Linux, spawn the user-owned binary directly as before.
         #[cfg(target_os = "macos")]
         let mut cmd = if tun_mode {
+            // Launch the argument-less root-owned wrapper (the ONLY thing the sudoers rule
+            // grants). It copies THIS app-generated config (already written to the staging
+            // path the wrapper reads) into a root-owned 0600 file and runs that — so root is
+            // never handed an arbitrary config path or subcommand.
             let mut c = TokioCommand::new("sudo");
-            c.args(["-n", crate::tun::TUN_ROOT_BIN, "run", "-c", cfg_arg]);
+            c.args(["-n", crate::tun::TUN_ROOT_RUN]);
             c
         } else {
             let mut c = TokioCommand::new(&binary);
@@ -572,13 +591,25 @@ pub async fn start_singbox(
 /// task flips to false the moment `child.wait()` returns. This avoids spawning a slow
 /// `tasklist` process on every poll (the old approach cost up to ~3s).
 pub async fn stop_singbox(state: SharedState, graceful: bool) -> Result<()> {
-    let pid = {
+    let (running, pid) = {
         // Mark the coming exit as intentional BEFORE signalling the core, so the process-exit
         // waiter reports it as a normal stop rather than a crash (no proxy clear / crash event).
         let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
         s.stopping = true;
-        s.pid
+        (s.running, s.pid)
     };
+
+    // If the core has already exited (the waiter flipped `running` to false), the stored PID
+    // may have been recycled by the OS — signalling it could kill an unrelated process. Skip
+    // the kill entirely and just reconcile state. This closes the PID-reuse window since the
+    // Child handle lives in the waiter task and isn't available here.
+    if !running {
+        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
+        s.running = false;
+        s.pid = None;
+        s.start_time = None;
+        return Ok(());
+    }
 
     if let Some(pid) = pid {
         #[cfg(target_os = "windows")]

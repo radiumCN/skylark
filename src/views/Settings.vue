@@ -3,7 +3,8 @@ import { ref, watch, onMounted, onUnmounted, computed, nextTick } from "vue";
 import {
   Shield, Globe, Cpu, Monitor, Download,
   RefreshCw, CheckCircle, AlertCircle, Package, ExternalLink,
-  ShieldCheck, ShieldAlert, Check, Rocket, Zap, Save, Upload, Archive, Layers, Trash2
+  ShieldCheck, ShieldAlert, Check, Rocket, Zap, Save, Upload, Archive, Layers, Trash2,
+  FolderOpen
 } from "@lucide/vue";
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -213,6 +214,20 @@ function scheduleSave() {
 }
 
 watch(localConfig, scheduleSave, { deep: true });
+
+/**
+ * Jump to the log directory in the system file manager. The backend returns the newest
+ * log file (revealed = folder opens with it selected) or the folder itself when empty.
+ * Mainly for macOS, where ~/Library/Application Support/Skylark/logs is hard to reach.
+ */
+async function openLogDir() {
+  try {
+    const path = await invoke<string>("cmd_get_log_dir_entry");
+    await revealItemInDir(path);
+  } catch (e) {
+    fb.toastError(t('settings.openLogDirFailed', { e }));
+  }
+}
 
 // ─── Config backup / restore ──────────────────────────────────────────
 
@@ -877,6 +892,10 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.logToFile') }}</div>
             <div class="setting-desc">{{ t('settings.logToFileDesc') }}</div>
           </div>
+          <button class="btn btn-ghost btn-sm" @click="openLogDir">
+            <FolderOpen :size="12" />
+            {{ t('settings.openLogDir') }}
+          </button>
           <ToggleSwitch v-model="localConfig.log_to_file" :aria-label="t('settings.logToFile')" />
         </div>
         <div class="setting-divider" />

@@ -415,6 +415,36 @@ pub fn cmd_export_logs(state: State<'_, AppState>) -> Result<String, String> {
     Ok(path.to_string_lossy().to_string())
 }
 
+/// Return the path the frontend should reveal to land the user in the log directory
+/// (`app_data_dir/logs/`). Finding it by hand is easy to describe on Windows but buried on
+/// macOS (~/Library/Application Support/Skylark/logs), hence a one-click jump in Settings.
+///
+/// Prefers the most recently modified `.log` FILE inside the directory: `revealItemInDir`
+/// on a file opens the logs folder itself with that file selected, whereas revealing the
+/// directory only selects it in its PARENT. Falls back to the (freshly created, if needed)
+/// directory when no log file exists yet.
+#[tauri::command]
+pub fn cmd_get_log_dir_entry() -> Result<String, String> {
+    let dir = config::app_data_dir().join("logs");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let newest_log = std::fs::read_dir(&dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| {
+            e.path().extension().and_then(|x| x.to_str()) == Some("log")
+                && e.file_type().map(|t| t.is_file()).unwrap_or(false)
+        })
+        .max_by_key(|e| {
+            e.metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
+    let target = newest_log.map(|e| e.path()).unwrap_or(dir);
+    Ok(target.to_string_lossy().to_string())
+}
+
 // ─── Config backup / restore ────────────────────────────────────────
 
 /// Marker so import can reject unrelated JSON files.

@@ -657,6 +657,7 @@ pub fn run() {
             commands::cmd_save_app_config,
             commands::cmd_set_proxy_mode,
             commands::cmd_export_logs,
+            commands::cmd_get_log_dir_entry,
             commands::cmd_get_connections,
             commands::cmd_close_connection,
             commands::cmd_close_all_connections,

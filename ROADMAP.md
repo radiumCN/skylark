@@ -8,15 +8,16 @@
 
 ## 一、现状盘点（决定优先级的事实）
 
-通过通读代码确认的当前能力与缺口：
+通过通读代码确认的当前能力与缺口（**2026-07-10 更新**——本节初版（2026-06-25）中的多项缺口已在后续批次落地，当时的表述见 git history）：
 
-- **平台**：CI 已产出 Windows(.exe) / macOS(Intel+ARM, .dmg) / **Linux(.deb)**，但 `proxy.rs` 的 Linux `set_system_proxy` 是**空实现 stub**（`#[cfg(not(any(windows, macos)))]` 直接返回 `Ok(())`）——Linux 包能装却不能设系统代理，属「半成品平台」。
-- **i18n 真空**：`AppConfig.language` 默认 `zh-CN`、仓库有 `README.en.md`，但**没有任何 i18n 框架**，Settings 里**没有语言切换入口**，UI 文案全部硬编码中文（仅 `Home.vue` 就 ~200 处中文）。对外宣称双语，实际单语。
-- **协议**：vmess/vless/ss/trojan/hysteria2/tuic/anytls 及 Clash YAML 映射齐全；**WireGuard 暂缓**（需 1.12 endpoint 模型），SSR 内核不支持。
-- **已有但可深化**：订阅 QR 展示 + 剪贴板读取已实现；进程名分流（per-app routing）模型与 UI 均已存在；规则编辑器、rule-provider 管理齐全。
-- **数据生命周期**：流量统计、延迟、速率曲线**全部仅存活于单次会话**，重启清零，无历史持久化。
-- **更新**：应用自更新走「手动下载 + 安装器重启」，**未接 Tauri 官方签名 updater**（无更新包签名校验，存在中间人投毒面）。
-- **测试**：后端 `cargo test --lib` 37 passed，集中在解析/配置生成；前端无单测、无 E2E。
+- **平台**：CI 产出 Windows(.exe) / macOS(Intel+ARM, .dmg) / Linux(.deb)。Linux 系统代理已非 stub——`proxy.rs` 走 GNOME `gsettings`（C2 部分完成）；**剩余**：KDE（kwriteconfig）、`http_proxy` env 回退、Linux TUN 提权路径。
+- **i18n**：`vue-i18n@11` 已全量落地（`src/i18n/`，zh-CN + en 键集完全镜像，Settings 有语言切换入口，store 层错误文案与托盘 tooltip 也已接入）。**剩余**：托盘菜单（`lib.rs` Rust 侧）与后端用户可见错误串仍是硬编码中文——C1 方案第 4 步（托盘 match 映射）尚未做。
+- **协议**：vmess/vless/ss/trojan/hysteria2/tuic/anytls 及 Clash YAML 映射齐全；WireGuard 已按 1.12 endpoint 模型实现（N3，待真机校验）；SSR 内核不支持。
+- **已有但可深化**：订阅 QR / 剪贴板导入、进程名分流、规则编辑器 + rule-provider、规则拖拽排序（C6）、连接视图过滤/排序/按主机聚合（C5）、多 Profile（N6）、全局快捷键（N4）、诊断面板（N5，**DNS 泄漏检测未做**）均已存在。
+- **数据生命周期**：流量历史已按日聚合持久化 + 统计页（N1）；**节点延迟历史仍无**（N7 剩余项）。
+- **更新**：应用自更新与内核下载均有 **SHA-256 fail-closed 校验**（C3 部分/C4）；**仍未接 Tauri 签名 updater（minisign）**，这是剩余的主要安全缺口。
+- **待接通的半成品**：`src-tauri/ui/` 已提交完整 yacd 构建、生成的配置也写了 `external_ui`，但打包 resources 不含它、启动也不复制——要么接通（补打包 + 应用内入口，注意带 `?hostname&port&secret` 参数），要么移除以免误导。
+- **测试**：后端 `cargo test --lib` 48 tests，集中在解析/配置生成/名称清洗；前端无单测、无 E2E。
 
 ---
 
@@ -135,7 +136,7 @@
 - [x] **C4 内核下载哈希校验**（2026-06-25）：用 GitHub 资产自带 `digest`（sha256）字段，下载后比对再落盘，失败丢弃。新增 `sha2` 依赖、`sha256_hex` / `normalize_sha256_digest` 纯函数 + 4 单测；`ReleaseInfo.sha256`（`serde(default)` 向后兼容）；`cmd_download_singbox` 增 `sha256` 参数；`Settings.vue` 透传。harness 校验通过、vue-tsc 通过。
 - [x] **N2 订阅节点过滤 / 地区分组**（2026-06-25）：`Subscription` 增 `include`/`exclude`（正则，大小写不敏感，非法正则不丢节点）/`group_by_region`（`serde(default)`）；`subscription.rs` 新增 `detect_region` + `apply_node_filters` 纯函数 + 4 单测（含 outbound 锁步过滤、token 边界、非法正则保全）；接入 add/import/update/auto_update 四条解析路径；新增 `cmd_set_subscription_filters`（离线对缓存内容重过滤）+ lib.rs 注册；前端 store action、Subscriptions 添加对话框过滤区、每订阅过滤按钮 + 弹窗。harness 校验通过、vue-tsc 通过。
 - [x] **N1 流量历史持久化与统计页**（2026-06-25）：新增后端 `stats.rs`——按日 bucket 聚合上下行，`StatsData::{add_sample,recent,prune}` 纯函数（saturating 防溢出、保留 180 天）+ 4 单测；`OnceLock<Mutex>` 进程级缓存，落盘 `traffic_stats.json`。新增 `cmd_add_traffic_sample` / `cmd_get_traffic_history` + lib.rs 注册。前端 store 累积每秒 delta、~30s 批量 flush（含停止时 flush、失败回滚），`fetchTrafficHistory` action；新增 `Stats.vue`（汇总卡 + chart.js 堆叠柱状，7/30/90 天切换）+ 路由 + 侧栏「流量统计」入口。harness 校验通过、vue-tsc 通过。延迟历史归入后续 N7。
-- [x] **C1 国际化 i18n 全量落地**（2026-06-25）：装 `vue-i18n@11`，建 `src/i18n/`（zh-CN + en，`createI18n` legacy:false）；main.ts 注入；`setLocale` 持久化 localStorage；App.vue `watch(config.language)` 响应式切换；Settings「语言」选择器（写入 `AppConfig.language`，即时切换）。**全部 8 个视图 + Sidebar 已完成中文抽取**（Home/Subscriptions/Nodes/Connections/Logs/Rules/Stats/Settings，按命名空间组织 ~330 个 key，zh/en 双语镜像，含命名插值）。`vue-tsc` + `npm run build` 通过；视图模板已无硬编码中文（仅余 Settings 一处后端错误串匹配的 logic，非显示文案）。**小遗留**：`formatDate` 等少量 `toLocaleDateString("zh-CN")` 日期本地化未随 locale 切换，后续可接入。
+- [x] **C1 国际化 i18n 全量落地**（2026-06-25）：装 `vue-i18n@11`，建 `src/i18n/`（zh-CN + en，`createI18n` legacy:false）；main.ts 注入；`setLocale` 持久化 localStorage；App.vue `watch(config.language)` 响应式切换；Settings「语言」选择器（写入 `AppConfig.language`，即时切换）。**全部 8 个视图 + Sidebar 已完成中文抽取**（Home/Subscriptions/Nodes/Connections/Logs/Rules/Stats/Settings，按命名空间组织 ~330 个 key，zh/en 双语镜像，含命名插值）。`vue-tsc` + `npm run build` 通过；视图模板已无硬编码中文（仅余 Settings 一处后端错误串匹配的 logic，非显示文案）。**2026-07-10 补充**：`formatDate` 日期本地化、store 层错误文案与托盘 tooltip 已接入 i18n；**仍未做**：托盘菜单（`lib.rs` Rust 侧 match 映射，即原方案第 4 步）与后端命令返回的中文错误串——严格说 C1 是「前端完成、Rust 侧待补」。
 
 - [x] **C5 连接视图增强**（2026-06-25）：`Connections.vue` 在既有搜索基础上新增——可点击表头排序（主机 / 上传 / 下载 / 协议，升降序切换，箭头指示）、当前筛选连接的上下行**实时总计**、「列表 / 按主机聚合」视图切换（聚合视图按 host 汇总连接数与流量，支持一键关闭该主机全部连接）、无匹配结果提示。纯前端，复用 Clash API 数据；新增 6 个 i18n key（zh/en）。vue-tsc + build 通过。
 

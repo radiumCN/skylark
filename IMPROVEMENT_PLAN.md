@@ -232,13 +232,14 @@
 - **影响文件**：`src-tauri/src/updater.rs`、`src-tauri/src/lib.rs`。
 - **验证**：`cargo check` 无警告。
 
-#### F7+. 真正优雅退出 sing-box（从源头消除残留）✅ 已完成（2026-06-25）
+#### F7+. 真正优雅退出 sing-box（从源头消除残留）✅ 已完成（2026-06-25；**机制于后续重写，本节已按现行实现更新 2026-07-10**）
 - **背景**：F7 的根因之一是 graceful 停止对无窗口控制台进程无效——`taskkill /PID`（无 `/F`）发 `WM_CLOSE`，sing-box（`CREATE_NO_WINDOW` 的无窗口控制台进程）收不到，超时后强杀，跳过自身 TUN/路由清理。
-- **实现**：改为投递**真正的 Ctrl+C**（→ Go `os.Interrupt`/SIGINT），触发 sing-box 自身的 `WintunDeleteAdapter` + `strict_route` 清理。
-  - `singbox.rs` 新增 `send_ctrl_c(pid)`（Windows）：`FreeConsole → AttachConsole(pid)`（核心由 `CREATE_NO_WINDOW` 启动，拥有可附加的隐藏 console）→ `SetConsoleCtrlHandler(NULL, TRUE)`（自身忽略，避免连带杀掉 GUI）→ `GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0)` → `FreeConsole` + 恢复 handler。
-  - `stop_singbox` 的 graceful 分支用 `send_ctrl_c` 替代无效的 `taskkill`，轮询最多 ~3s 等待核心自行退出，仍未退出再 `/F` 兜底。
-  - **关键约束**：核心**不得**用 `CREATE_NEW_PROCESS_GROUP` 启动（新进程组默认禁用 Ctrl+C）——保持现有启动 flag 不变。
-  - `Cargo.toml`：winapi 增加 `wincon`、`consoleapi` features。
+- **现行实现**（`singbox.rs::send_graceful_break`）：投递**定向 CTRL+BREAK**（→ Go 同样按 SIGINT 语义处理），触发 sing-box 自身的 `WintunDeleteAdapter` + `strict_route` 清理。
+  - 核心以 `CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW` 启动——**新进程组 id == 核心 pid**，于是 `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid)` 只到达核心进程组，**不会波及 GUI**。
+  - 必须用 CTRL+**BREAK** 而非 CTRL+C：`CREATE_NEW_PROCESS_GROUP` 启动的进程默认禁用 Ctrl+C，但 CTRL_BREAK 不受影响。
+  - `AttachConsole(pid) → SetConsoleCtrlHandler(handler, TRUE) → GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) → FreeConsole` + 恢复 handler；GUI 自身 handler 吞掉 CTRL_C/CTRL_BREAK 防误杀。
+  - `stop_singbox` 的 graceful 分支轮询最多 ~3s 等待核心自行退出，仍未退出再强杀兜底。
+  - > 历史注：初版实现用「无 `CREATE_NEW_PROCESS_GROUP` + 广播 CTRL_C_EVENT(0)」，该广播语义在更新器工作线程上会连带终止 GUI 自身（updater.rs 有事故记录），故重写为「专属进程组 + 定向 CTRL_BREAK」。
 - **效果**：TUN 停止/重启/更新拆除时核心都能自清理，网卡/路由不再常驻；F7 的清理与收敛等待降级为兜底防御。
 - **影响文件**：`src-tauri/src/singbox.rs`、`src-tauri/Cargo.toml`。
 - **验证**：`cargo check` 无警告、`cargo test --lib` 37 passed。
@@ -267,3 +268,12 @@
 - [x] Q4 版本命名统一（版本来源 + 命名约定已确立）
 - [x] S1 Clash API secret
 - [x] F4 小功能集（配置导入/导出；日志可选落盘 + 事件增量推送；节点搜索/批量测速本已存在；TUN mtu 确认）
+
+---
+
+## 已知依赖债（2026-07-10 登记，暂不迁移）
+
+- **`serde_yaml 0.9`**：官方已归档停维（RUSTSEC-2024-0320），且用在解析**不可信订阅输入**的路径（`subscription.rs`）。候选：`yaml-rust2` 或手写受限解析；`serde_yml` 分叉质量存疑不推荐。迁移涉及全部 Clash YAML 解析路径，需专门批次 + 全量订阅样本回归，故登记不动。
+- **`winapi 0.3`**：不再维护，生态已迁 `windows-sys`。本项目用到 12 个 features、散布 tun/singbox/proxy 多处，迁移量大、收益低（API 冻结），低优先级。
+- **`tokio` features "full"**：可裁剪至实际用到的 feature 集（仅编译期成本，运行时无差别）。
+- 已完成的小项：`dirs-next` → `dirs`（2026-07-10）；npm 侧删除零引用的 `js-yaml`/`@vueuse/core` 及 5 个未用的 `@tauri-apps/plugin-*` JS wrapper（Rust 侧插件保留），`@types/qrcode` 移入 devDependencies。

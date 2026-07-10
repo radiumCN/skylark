@@ -7,6 +7,7 @@ import { useFeedbackStore } from "../stores/feedback";
 const { t } = useI18n();
 const fb = useFeedbackStore();
 const confirmBtn = ref<HTMLButtonElement | null>(null);
+const cancelBtn = ref<HTMLButtonElement | null>(null);
 
 function onKey(e: KeyboardEvent) {
   if (!fb.confirmOpen) return;
@@ -14,18 +15,28 @@ function onKey(e: KeyboardEvent) {
     e.preventDefault();
     fb.resolveConfirm(false);
   } else if (e.key === "Enter") {
+    // Danger dialogs must not confirm on a bare Enter — the highest-cost action can't be
+    // the default key. Enter then activates whichever button holds focus (native behavior).
+    if (!fb.confirmOptions.danger) {
+      e.preventDefault();
+      fb.resolveConfirm(true);
+    }
+  } else if (e.key === "Tab") {
+    // Minimal focus trap: keep Tab cycling between the two buttons instead of escaping
+    // into the inert background page.
     e.preventDefault();
-    fb.resolveConfirm(true);
+    (document.activeElement === confirmBtn.value ? cancelBtn : confirmBtn).value?.focus();
   }
 }
 
-// Global key handling + focus the primary action only while the dialog is open.
+// Global key handling + initial focus only while the dialog is open. Danger dialogs
+// focus Cancel (safe default); everything else focuses the primary action.
 watch(
   () => fb.confirmOpen,
   (open) => {
     if (open) {
       window.addEventListener("keydown", onKey);
-      nextTick(() => confirmBtn.value?.focus());
+      nextTick(() => (fb.confirmOptions.danger ? cancelBtn : confirmBtn).value?.focus());
     } else {
       window.removeEventListener("keydown", onKey);
     }
@@ -35,10 +46,10 @@ watch(
 
 <template>
   <Teleport to="body">
-    <Transition name="confirm">
+    <Transition name="modal-pop">
       <div
         v-if="fb.confirmOpen"
-        class="confirm-overlay"
+        class="modal-overlay"
         @click.self="fb.resolveConfirm(false)"
       >
         <div class="confirm-dialog card-strong" role="alertdialog" aria-modal="true">
@@ -52,7 +63,7 @@ watch(
           </div>
           <p class="confirm-message">{{ fb.confirmOptions.message }}</p>
           <div class="confirm-actions">
-            <button class="btn btn-ghost" @click="fb.resolveConfirm(false)">
+            <button ref="cancelBtn" class="btn btn-ghost" @click="fb.resolveConfirm(false)">
               {{ fb.confirmOptions.cancelText ?? t('common.cancel') }}
             </button>
             <button
@@ -71,18 +82,7 @@ watch(
 </template>
 
 <style scoped>
-.confirm-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-modal);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-6);
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
-}
+/* Overlay + entrance come from the shared .modal-overlay / modal-pop spec in main.css. */
 .confirm-dialog {
   width: 100%;
   max-width: 380px;
@@ -127,24 +127,5 @@ watch(
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
-}
-
-/* Scale + fade from centre — dialog scales up, scrim fades. */
-.confirm-enter-active,
-.confirm-leave-active {
-  transition: opacity 0.2s ease;
-}
-.confirm-enter-active .confirm-dialog,
-.confirm-leave-active .confirm-dialog {
-  transition: transform 0.2s cubic-bezier(0.34, 1.4, 0.64, 1), opacity 0.2s ease;
-}
-.confirm-enter-from,
-.confirm-leave-to {
-  opacity: 0;
-}
-.confirm-enter-from .confirm-dialog,
-.confirm-leave-to .confirm-dialog {
-  opacity: 0;
-  transform: scale(0.94) translateY(6px);
 }
 </style>

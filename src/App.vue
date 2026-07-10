@@ -91,7 +91,7 @@ onMounted(async () => {
   overflow-x: hidden;
   /* No TOP padding: it lives on .page instead, so sticky headers can pin flush
      to the scroll top (a top padding here would leave a gap the content peeks
-     through). Sides + bottom stay here. */
-  padding: 0 24px 24px;
+     through). Sides + bottom stay here (token shared with the full-bleed bars). */
+  padding: 0 var(--content-pad-x) var(--content-pad-x);
 }
 </style>

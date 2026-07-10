@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
+import { useModal } from "../composables/useModal";
 import { invoke } from "@tauri-apps/api/core";
 
 const { t } = useI18n();
@@ -48,7 +49,19 @@ const rules = ref<RouteRule[]>([]);
 const loading = ref(false);
 const expandedId = ref<string | null>(null);
 const showAddDialog = ref(false);
+const addDialogEl = ref<HTMLElement | null>(null);
+useModal(showAddDialog, {
+  onClose: () => {
+    showAddDialog.value = false;
+    resetNewRule();
+  },
+  dialog: addDialogEl,
+});
 const saving = ref(false);
+// True while the local rule ORDER differs from what the backend has persisted. Only
+// reordering (drag / move buttons) is deferred to "Save & Apply" — add/toggle/delete
+// persist immediately via their own commands — so only those paths set this.
+const dirty = ref(false);
 
 // ─── Remote rule-set providers ───────────────────────────────────────
 const providers = ref<RuleProvider[]>([]);
@@ -160,6 +173,7 @@ async function load() {
   loading.value = true;
   try {
     rules.value = await invoke<RouteRule[]>("cmd_get_rules");
+    dirty.value = false;
   } catch (e) {
     fb.toastError(String(e));
   } finally {
@@ -189,6 +203,8 @@ async function saveAll() {
   saving.value = true;
   try {
     await invoke("cmd_save_rules", { rules: rules.value });
+    dirty.value = false;
+    fb.toastSuccess(t("rules.saved"));
   } catch (e) {
     fb.toastError(String(e));
   } finally {
@@ -200,6 +216,7 @@ async function resetToDefault() {
   if (!(await fb.confirm({ message: t("rules.confirmReset"), danger: true }))) return;
   try {
     rules.value = await invoke<RouteRule[]>("cmd_reset_rules");
+    dirty.value = false;
   } catch (e) {
     fb.toastError(String(e));
   }
@@ -270,10 +287,12 @@ async function addRule() {
 function moveUp(index: number) {
   if (index <= 0) return;
   [rules.value[index - 1], rules.value[index]] = [rules.value[index], rules.value[index - 1]];
+  dirty.value = true;
 }
 function moveDown(index: number) {
   if (index >= rules.value.length - 1) return;
   [rules.value[index], rules.value[index + 1]] = [rules.value[index + 1], rules.value[index]];
+  dirty.value = true;
 }
 
 // ─── Drag-to-reorder ────────────────────────────────────────────────
@@ -297,6 +316,7 @@ function onDrop(target: number) {
   if (from === null || from === target) return;
   const [moved] = rules.value.splice(from, 1);
   rules.value.splice(target, 0, moved);
+  dirty.value = true;
 }
 function onDragEnd() {
   dragIndex.value = null;
@@ -370,8 +390,14 @@ onMounted(() => {
           <Plus :size="14" />
           {{ t("rules.addRule") }}
         </button>
-        <button class="btn btn-primary" :disabled="saving" @click="saveAll">
+        <button
+          class="btn btn-primary"
+          :disabled="saving"
+          :title="dirty ? t('rules.unsaved') : undefined"
+          @click="saveAll"
+        >
           {{ saving ? t("rules.saving") : t("rules.saveApply") }}
+          <span v-if="dirty && !saving" class="dirty-dot" :aria-label="t('rules.unsaved')" />
         </button>
       </div>
     </div>
@@ -425,7 +451,7 @@ onMounted(() => {
             </div>
             <div class="provider-url" :title="p.url">{{ p.url }}</div>
           </div>
-          <button class="icon-btn danger" :title="t('rules.delete')" @click="deleteProvider(p.id)">
+          <button class="icon-btn danger" :title="t('rules.delete')" :aria-label="t('rules.delete')" @click="deleteProvider(p.id)">
             <Trash2 :size="14" />
           </button>
         </div>
@@ -485,7 +511,15 @@ onMounted(() => {
         @dragend="onDragEnd"
       >
         <!-- Rule Header -->
-        <div class="rule-header" @click="expandedId = expandedId === rule.id ? null : rule.id">
+        <div
+          class="rule-header"
+          role="button"
+          tabindex="0"
+          :aria-expanded="expandedId === rule.id"
+          @click="expandedId = expandedId === rule.id ? null : rule.id"
+          @keydown.enter.prevent="expandedId = expandedId === rule.id ? null : rule.id"
+          @keydown.space.prevent="expandedId = expandedId === rule.id ? null : rule.id"
+        >
           <GripVertical :size="14" class="drag-handle" :title="t('rules.dragHint')" @click.stop />
           <div class="rule-order">{{ index + 1 }}</div>
           <span
@@ -503,13 +537,13 @@ onMounted(() => {
             {{ actionLabel(rule.action) }}
           </span>
           <div class="rule-controls">
-            <button class="icon-btn" :title="t('rules.moveUp')" @click.stop="moveUp(index)">
+            <button class="icon-btn" :title="t('rules.moveUp')" :aria-label="t('rules.moveUp')" @click.stop="moveUp(index)">
               <ChevronUp :size="14" />
             </button>
-            <button class="icon-btn" :title="t('rules.moveDown')" @click.stop="moveDown(index)">
+            <button class="icon-btn" :title="t('rules.moveDown')" :aria-label="t('rules.moveDown')" @click.stop="moveDown(index)">
               <ChevronDown :size="14" />
             </button>
-            <button class="icon-btn danger" :title="t('rules.delete')" @click.stop="deleteRule(rule.id)">
+            <button class="icon-btn danger" :title="t('rules.delete')" :aria-label="t('rules.delete')" @click.stop="deleteRule(rule.id)">
               <Trash2 :size="13" />
             </button>
           </div>
@@ -562,8 +596,9 @@ onMounted(() => {
     </div>
 
     <!-- Add Rule Dialog -->
-    <div v-if="showAddDialog" class="dialog-overlay" @click.self="showAddDialog = false; resetNewRule()">
-      <div class="dialog card-strong">
+    <Transition name="modal-pop">
+    <div v-if="showAddDialog" class="modal-overlay" @click.self="showAddDialog = false; resetNewRule()">
+      <div ref="addDialogEl" class="dialog card-strong" role="dialog" aria-modal="true" :aria-label="t('rules.addRuleDialogTitle')" tabindex="-1">
         <div class="dialog-title">
           <Plus :size="16" />
           {{ t("rules.addRuleDialogTitle") }}
@@ -659,6 +694,7 @@ onMounted(() => {
         </div>
       </div>
     </div>
+    </Transition>
 
     <!-- Rule order note -->
     <div class="order-note">
@@ -671,6 +707,16 @@ onMounted(() => {
 <style scoped>
 /* Page primitives (.page/.page-header/.page-title/.page-subtitle/.header-actions)
    are provided globally by main.css. */
+
+/* Unsaved-reorder marker on "Save & Apply" (order changes are local until saved). */
+.dirty-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
+}
 
 /* Presets */
 .preset-card { padding: 12px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -690,7 +736,7 @@ onMounted(() => {
 }
 .preset-btn:hover { box-shadow: var(--shadow-sm); color: var(--color-text); }
 .preset-action {
-  font-size: 10px; font-weight: 700; padding: 1px 5px;
+  font-size: var(--fs-2xs); font-weight: 700; padding: 1px 5px;
   border-radius: 3px; margin-right: 2px;
 }
 .preset-proxy .preset-action { background: var(--color-primary-soft); color: var(--color-primary); }
@@ -759,30 +805,14 @@ onMounted(() => {
 .expand-enter-active, .expand-leave-active { transition: all 0.2s ease; max-height: 300px; overflow: hidden; }
 .expand-enter-from, .expand-leave-to { max-height: 0; opacity: 0; padding: 0 14px; }
 
-/* Add Dialog */
-.dialog-overlay {
-  position: fixed; inset: 0; z-index: var(--z-modal);
-  background: rgba(0,0,0,0.5);
-  display: flex; align-items: center; justify-content: center;
-  padding: 24px;
-  backdrop-filter: blur(4px);
-  animation: overlayIn 0.2s ease-out;
-}
+/* Add Dialog — overlay + entrance/exit come from the shared .modal-overlay / modal-pop
+   spec in main.css (the old CSS `animation` had no leave transition: it hard-cut). */
 .dialog {
   width: 100%; max-width: 640px; max-height: 80vh; overflow-y: auto;
   padding: 24px;
   display: flex; flex-direction: column; gap: 16px;
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg), var(--edge-highlight);
-  animation: dialogIn 0.22s ease-out;
-}
-@keyframes overlayIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-@keyframes dialogIn {
-  from { opacity: 0; transform: scale(0.97) translateY(6px); }
-  to { opacity: 1; transform: scale(1) translateY(0); }
 }
 .dialog-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; }
 .dialog-form { display: flex; flex-direction: column; gap: 10px; }
@@ -828,13 +858,13 @@ onMounted(() => {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .provider-badge {
-  font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 100px;
+  font-size: var(--fs-2xs); font-weight: 600; padding: 1px 7px; border-radius: 100px;
 }
 .provider-badge.preset-proxy { background: var(--color-primary-soft); color: var(--color-primary); }
 .provider-badge.preset-direct { background: var(--color-success-soft); color: var(--color-success); }
 .provider-badge.preset-block { background: var(--color-error-soft); color: var(--color-error); }
 .provider-fmt {
-  font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: var(--radius-sm);
+  font-size: var(--fs-2xs); font-weight: 600; padding: 1px 6px; border-radius: var(--radius-sm);
   background: var(--color-neutral-strong); color: var(--color-text-secondary);
 }
 

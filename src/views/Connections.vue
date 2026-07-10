@@ -120,8 +120,15 @@ const hostGroups = computed<HostGroup[]>(() => {
 });
 
 async function closeHostGroup(g: HostGroup) {
-  await Promise.allSettled(g.ids.map((id) => invoke("cmd_close_connection", { id })));
-  connections.value = connections.value.filter((c) => !g.ids.includes(c.id));
+  const results = await Promise.allSettled(
+    g.ids.map((id) => invoke("cmd_close_connection", { id }))
+  );
+  // Same bookkeeping as closeConnection/closeAll: successfully closed ids must enter
+  // recentlyClosed, or an in-flight poll issued before the close re-adds the rows for one
+  // interval. Failed ids stay in the list — the next poll reconciles them.
+  const closed = g.ids.filter((_, i) => results[i].status === "fulfilled");
+  closed.forEach((id) => recentlyClosed.add(id));
+  connections.value = connections.value.filter((c) => !closed.includes(c.id));
 }
 
 // Build a compact rule label from rule + rule_payload
@@ -151,6 +158,7 @@ function isProxy(chains: string[]): boolean {
 // would otherwise re-add the closed row for up to one interval; filter these out until the
 // backend stops reporting them (then forget them). Also guards against overlapping polls.
 let fetching = false;
+let pollFailures = 0;
 const recentlyClosed = new Set<string>();
 
 async function fetchConnections() {
@@ -159,13 +167,18 @@ async function fetchConnections() {
   loading.value = true;
   try {
     const list = await invoke<ConnectionInfo[]>("cmd_get_connections");
+    pollFailures = 0;
     const present = new Set(list.map((c) => c.id));
     for (const id of recentlyClosed) {
       if (!present.has(id)) recentlyClosed.delete(id);
     }
     connections.value = list.filter((c) => !recentlyClosed.has(c.id));
   } catch {
-    connections.value = [];
+    // One transient IPC/API hiccup must not blank the table and flash the empty state
+    // (it repopulates a beat later). But repeated failures mean the core really is gone —
+    // then stale rows would linger forever, so clear after the second consecutive miss.
+    pollFailures += 1;
+    if (pollFailures >= 2) connections.value = [];
   } finally {
     loading.value = false;
     fetching = false;
@@ -270,7 +283,7 @@ onUnmounted(() => {
             <td class="col-traffic upload-val">↑ {{ formatBytes(g.upload) }}</td>
             <td class="col-traffic download-val">↓ {{ formatBytes(g.download) }}</td>
             <td class="col-close">
-              <button class="close-btn" :title="t('connections.closeHost')" @click="closeHostGroup(g)">
+              <button class="close-btn" :title="t('connections.closeHost')" :aria-label="t('connections.closeHost')" @click="closeHostGroup(g)">
                 <X :size="13" />
               </button>
             </td>
@@ -332,7 +345,7 @@ onUnmounted(() => {
               <span class="proto-tag">{{ conn.network.toUpperCase() }}</span>
             </td>
             <td class="col-close">
-              <button class="close-btn" :title="t('connections.closeConn')" @click="closeConnection(conn.id)">
+              <button class="close-btn" :title="t('connections.closeConn')" :aria-label="t('connections.closeConn')" @click="closeConnection(conn.id)">
                 <X :size="13" />
               </button>
             </td>
@@ -403,6 +416,13 @@ onUnmounted(() => {
   opacity: 0; transition: opacity 0.15s ease-out, background 0.15s ease-out, color 0.15s ease-out;
 }
 .conn-table tr:hover .close-btn { opacity: 1; }
+/* Keyboard users never trigger the row hover — reveal the button on focus too, or the
+   action is mouse-only. */
+.close-btn:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
 .close-btn:hover { background: var(--color-error-soft); color: var(--color-error); }
 
 .text-muted { color: var(--color-text-muted); }
@@ -426,6 +446,6 @@ onUnmounted(() => {
 .proto-tag {
   display: inline-block; padding: 1px 5px; border-radius: var(--radius-sm);
   background: var(--color-neutral); color: var(--color-text-secondary);
-  font-size: 10px; font-weight: 600; letter-spacing: 0.3px;
+  font-size: var(--fs-2xs); font-weight: 600; letter-spacing: 0.3px;
 }
 </style>

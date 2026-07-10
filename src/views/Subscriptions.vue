@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted } from "vue";
+import { ref, computed, nextTick, onMounted } from "vue";
 import {
   Plus, RefreshCw, Trash2, QrCode, Clock, Server, AlertCircle, X, Copy, Check as CheckIcon, Zap, Filter
 } from "@lucide/vue";
@@ -10,6 +10,7 @@ import { useFeedbackStore } from "../stores/feedback";
 import { formatBytes } from "../utils/format";
 import { copyToClipboard, readFromClipboard } from "../utils/clipboard";
 import { useTemporaryFlag } from "../composables/useTemporaryFlag";
+import { useModal } from "../composables/useModal";
 import EmptyState from "../components/EmptyState.vue";
 import Skeleton from "../components/Skeleton.vue";
 import ToggleSwitch from "../components/ToggleSwitch.vue";
@@ -143,7 +144,9 @@ async function updateSub(id: string) {
   } catch (e) {
     fb.toastError(String(e));
   } finally {
-    updatingId.value = null;
+    // Only clear our own marker: with two updates in flight, the first to finish must not
+    // remove the second's spinner (and re-enable its button mid-update).
+    if (updatingId.value === id) updatingId.value = null;
   }
 }
 
@@ -207,6 +210,8 @@ function openFilter(sub: {
 function closeFilter() {
   filterVisible.value = false;
 }
+const filterDialogEl = ref<HTMLElement | null>(null);
+useModal(filterVisible, { onClose: closeFilter, dialog: filterDialogEl });
 
 async function saveFilter() {
   filterSaving.value = true;
@@ -255,6 +260,8 @@ function closeQr() {
   qrCopied.value = false;
   qrDataUrl.value = "";
 }
+const qrDialogEl = ref<HTMLElement | null>(null);
+useModal(qrVisible, { onClose: closeQr, dialog: qrDialogEl });
 
 async function copyUrl() {
   const ok = await copyToClipboard(qrSubUrl.value);
@@ -264,14 +271,16 @@ async function copyUrl() {
   // else: fallback — show the URL selected
 }
 
-const INTERVAL_OPTIONS = [
+// computed, not a plain const: t() evaluated once at setup freezes the labels in the
+// language active at mount time (same pattern as groupTypeOptions in Nodes.vue).
+const INTERVAL_OPTIONS = computed(() => [
   { value: 1,  label: t("subscriptions.every1h") },
   { value: 3,  label: t("subscriptions.every3h") },
   { value: 6,  label: t("subscriptions.every6h") },
   { value: 12, label: t("subscriptions.every12h") },
   { value: 24, label: t("subscriptions.every24h") },
   { value: 72, label: t("subscriptions.every3d") },
-];
+]);
 
 function formatNextUpdate(sub: { last_update?: string; update_interval: number }) {
   if (!sub.last_update) return t("subscriptions.notUpdatedYet");
@@ -453,6 +462,7 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
               class="btn btn-ghost icon-btn"
               :disabled="updatingId === sub.id"
               :title="t('subscriptions.updateTitle')"
+              :aria-label="t('subscriptions.updateTitle')"
               @click="updateSub(sub.id)"
             >
               <RefreshCw :size="14" :class="{ spin: updatingId === sub.id }" />
@@ -461,6 +471,7 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
               v-if="sub.url"
               class="btn btn-ghost icon-btn"
               :title="t('subscriptions.qrShareTitle')"
+              :aria-label="t('subscriptions.qrShareTitle')"
               @click="showQr(sub.name, sub.url)"
             >
               <QrCode :size="14" />
@@ -469,6 +480,7 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
               class="btn btn-ghost icon-btn"
               :class="{ 'filter-active': sub.include || sub.exclude || sub.group_by_region }"
               :title="t('subscriptions.filterTitle')"
+              :aria-label="t('subscriptions.filterTitle')"
               @click="openFilter(sub)"
             >
               <Filter :size="14" />
@@ -476,6 +488,7 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
             <button
               class="btn btn-ghost icon-btn danger"
               :title="t('subscriptions.delete')"
+              :aria-label="t('subscriptions.delete')"
               @click="deleteSub(sub.id, sub.name)"
             >
               <Trash2 :size="14" />
@@ -535,15 +548,15 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 
     <!-- QR Code dialog -->
     <Teleport to="body">
-      <Transition name="qr-fade">
-        <div v-if="qrVisible" class="qr-overlay" @click.self="closeQr">
-          <div class="qr-dialog">
+      <Transition name="modal-pop">
+        <div v-if="qrVisible" class="modal-overlay" @click.self="closeQr">
+          <div ref="qrDialogEl" class="qr-dialog" role="dialog" aria-modal="true" :aria-label="qrSubName" tabindex="-1">
             <div class="qr-header">
               <div class="qr-title">
                 <QrCode :size="15" />
                 {{ qrSubName }}
               </div>
-              <button class="qr-close" @click="closeQr">
+              <button class="qr-close" :aria-label="t('common.close')" :title="t('common.close')" @click="closeQr">
                 <X :size="16" />
               </button>
             </div>
@@ -558,7 +571,7 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 
               <div class="qr-url-row">
                 <span class="qr-url-text">{{ qrSubUrl }}</span>
-                <button class="btn btn-ghost qr-copy-btn" @click="copyUrl" :title="qrCopied ? t('subscriptions.copied') : t('subscriptions.copyLink')">
+                <button class="btn btn-ghost qr-copy-btn" @click="copyUrl" :title="qrCopied ? t('subscriptions.copied') : t('subscriptions.copyLink')" :aria-label="t('subscriptions.copyLink')">
                   <CheckIcon v-if="qrCopied" :size="13" class="copy-ok" />
                   <Copy v-else :size="13" />
                 </button>
@@ -571,15 +584,15 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 
     <!-- Node filter / grouping dialog -->
     <Teleport to="body">
-      <Transition name="qr-fade">
-        <div v-if="filterVisible" class="qr-overlay" @click.self="closeFilter">
-          <div class="qr-dialog filter-dialog">
+      <Transition name="modal-pop">
+        <div v-if="filterVisible" class="modal-overlay" @click.self="closeFilter">
+          <div ref="filterDialogEl" class="qr-dialog filter-dialog" role="dialog" aria-modal="true" :aria-label="t('subscriptions.filterTitle')" tabindex="-1">
             <div class="qr-header">
               <div class="qr-title">
                 <Filter :size="15" />
                 {{ t("subscriptions.filterTitle") }} — {{ filterSubName }}
               </div>
-              <button class="qr-close" @click="closeFilter">
+              <button class="qr-close" :aria-label="t('common.close')" :title="t('common.close')" @click="closeFilter">
                 <X :size="16" />
               </button>
             </div>
@@ -757,13 +770,8 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 .hint-list { display: flex; flex-direction: column; gap: 8px; }
 .hint-item { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--color-text-secondary); }
 
-/* ─── QR Code dialog ─── */
-.qr-overlay {
-  position: fixed; inset: 0; z-index: var(--z-modal);
-  background: rgba(0,0,0,0.55);
-  backdrop-filter: blur(3px);
-  display: flex; align-items: center; justify-content: center;
-}
+/* ─── QR Code dialog ───
+   Overlay + entrance come from the shared .modal-overlay / modal-pop spec in main.css. */
 .qr-dialog {
   background: var(--color-surface-strong);
   border: 1px solid var(--color-border);
@@ -825,8 +833,6 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 .copy-ok { color: var(--color-success); }
 
 /* QR dialog enter/leave transition */
-.qr-fade-enter-active, .qr-fade-leave-active { transition: opacity 0.22s ease-out, transform 0.22s ease-out; }
-.qr-fade-enter-from, .qr-fade-leave-to { opacity: 0; transform: scale(0.95); }
 
 /* Node filter UI */
 .filter-fold { margin: 4px 0 2px; border-top: 1px solid var(--color-border); padding-top: 8px; }
@@ -837,5 +843,5 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 .icon-btn.filter-active { color: var(--color-primary); }
 .filter-dialog { width: 420px; max-width: 92vw; }
 .filter-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
-.filter-note { font-size: 11.5px; color: var(--color-text-secondary); line-height: 1.5; }
+.filter-note { font-size: var(--fs-sm); color: var(--color-text-secondary); line-height: 1.5; }
 </style>

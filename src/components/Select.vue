@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount } from "vue";
+import { ref, computed, onBeforeUnmount, useId } from "vue";
 import { ChevronDown, Check } from "@lucide/vue";
 
 export interface SelectOption {
@@ -20,13 +20,15 @@ const props = withDefaults(
 );
 const emit = defineEmits<{ "update:modelValue": [value: string | number] }>();
 
-let uid = 0;
-const menuId = `select-menu-${(uid += 1)}`;
+// useId, not a counter in <script setup> scope: such a counter is re-created per
+// instance, so every menu got the same DOM id and onDocPointer's getElementById could
+// hit another instance's (or a leaving transition's) menu, eating the first click.
+const menuId = `select-menu-${useId()}`;
 
 const open = ref(false);
 const trigger = ref<HTMLButtonElement | null>(null);
 const activeIndex = ref(-1);
-const pos = ref({ top: 0, left: 0, width: 0 });
+const pos = ref({ top: 0, bottom: 0, left: 0, right: 0, width: 0, up: false });
 
 const selectedLabel = computed(() => {
   const o = props.options.find((opt) => opt.value === props.modelValue);
@@ -37,7 +39,20 @@ function updatePosition() {
   const el = trigger.value;
   if (!el) return;
   const r = el.getBoundingClientRect();
-  pos.value = { top: r.bottom + 4, left: r.left, width: r.width };
+  // The menu's height is unknown before it renders (capped at 280px + padding), so flip
+  // upward when the space below can't fit the cap but the space above is larger —
+  // otherwise a Select near the window bottom opens into an off-screen menu.
+  const cap = 288;
+  const below = window.innerHeight - r.bottom - 4;
+  const up = below < cap && r.top > below;
+  pos.value = {
+    top: r.bottom + 4,
+    bottom: window.innerHeight - r.top + 4,
+    left: r.left,
+    right: window.innerWidth - r.right,
+    width: r.width,
+    up,
+  };
 }
 
 function openMenu() {
@@ -114,6 +129,7 @@ onBeforeUnmount(closeMenu);
       :disabled="disabled"
       :aria-expanded="open"
       aria-haspopup="listbox"
+      :aria-activedescendant="open && activeIndex >= 0 ? `${menuId}-opt-${activeIndex}` : undefined"
       @click="toggle"
       @keydown="onTriggerKey"
     >
@@ -131,15 +147,17 @@ onBeforeUnmount(closeMenu);
           class="select-menu card-strong"
           role="listbox"
           :style="{
-            top: pos.top + 'px',
+            top: pos.up ? 'auto' : pos.top + 'px',
+            bottom: pos.up ? pos.bottom + 'px' : 'auto',
             left: menuAlign === 'left' ? pos.left + 'px' : 'auto',
-            right: menuAlign === 'right' ? 'auto' : 'auto',
+            right: menuAlign === 'right' ? pos.right + 'px' : 'auto',
             minWidth: pos.width + 'px',
           }"
         >
           <li
             v-for="(opt, i) in options"
             :key="opt.value"
+            :id="`${menuId}-opt-${i}`"
             class="select-option"
             :class="{ selected: opt.value === modelValue, active: i === activeIndex }"
             role="option"

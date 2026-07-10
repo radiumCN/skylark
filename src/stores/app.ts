@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
-import { detectLocale } from "../i18n";
+import { detectLocale, i18n } from "../i18n";
 
 export interface SingboxStatus {
   running: boolean;
@@ -220,13 +220,21 @@ export const useAppStore = defineStore("app", () => {
   }
 
   function updateTrayTooltip() {
-    const modeMap: Record<string, string> = { rule: "规则", global: "全局", direct: "直连", tun: "TUN" };
+    // Store code runs outside any component, so translate via the global composer —
+    // hardcoded strings here kept the tray tooltip Chinese in the English UI.
+    const t = i18n.global.t;
+    const modeMap: Record<string, string> = {
+      rule: t("home.ruleMode"),
+      global: t("home.globalMode"),
+      direct: t("home.directMode"),
+      tun: t("home.tunMode"),
+    };
     const mode = modeMap[config.value.proxy_mode] ?? config.value.proxy_mode;
     const node = isAutoGroup.value
-      ? (activeNodeNow.value ? `自动 → ${activeNodeNow.value}` : "自动选优")
-      : (activeNode.value?.name ?? "未选择");
-    const state = proxying.value ? "● 已连接" : "○ 未连接";
-    const tooltip = `Skylark\n${state}\n节点: ${node}\n模式: ${mode}`;
+      ? (activeNodeNow.value ? t("tray.autoWith", { name: activeNodeNow.value }) : t("tray.auto"))
+      : (activeNode.value?.name ?? t("tray.noneSelected"));
+    const state = proxying.value ? `● ${t("tray.connected")}` : `○ ${t("tray.disconnected")}`;
+    const tooltip = `Skylark\n${state}\n${t("tray.node")}: ${node}\n${t("tray.mode")}: ${mode}`;
     invoke("cmd_update_tray_tooltip", { tooltip }).catch(() => {});
   }
 
@@ -701,7 +709,7 @@ export const useAppStore = defineStore("app", () => {
       }
     } catch (e) {
       console.error("autostart sync failed:", e);
-      error.value = `开机自启动设置失败: ${String(e)}`;
+      error.value = i18n.global.t("errors.autostartFailed", { e: String(e) });
     }
   }
 
@@ -790,13 +798,13 @@ export const useAppStore = defineStore("app", () => {
       updateTrayTooltip();
     });
     await listen<string>("connection-mode-error", (event) => {
-      error.value = event.payload || "切换连接模式失败";
+      error.value = event.payload || i18n.global.t("errors.switchModeFailed");
     });
     // The core exited unexpectedly (crash / killed). The backend has already cleared the
     // now-dead system proxy (fail-open to direct); reconcile the UI so it stops showing a
     // live "connected" state, and surface the failure instead of silently black-holing.
     await listen("singbox-crashed", async () => {
-      error.value = "内核意外退出，代理已停止（已恢复直连）。请重新开启代理。";
+      error.value = i18n.global.t("errors.coreCrashed");
       await fetchStatus();
       await fetchConfig();
       await refreshSystemProxy();

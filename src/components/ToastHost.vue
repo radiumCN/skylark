@@ -57,14 +57,10 @@ const icons: Record<ToastType, Component> = {
   color: var(--color-text);
 }
 .toast-icon { flex-shrink: 0; }
-.toast-success .toast-icon { color: var(--color-success); }
+/* --color-success-text lifts the emerald on dark surfaces (theme-split in main.css). */
+.toast-success .toast-icon { color: var(--color-success-text); }
 .toast-error .toast-icon { color: var(--color-error); }
 .toast-info .toast-icon { color: var(--color-primary); }
-/* Emerald needs lifting on dark surfaces to stay legible (matches badges). */
-html[data-theme="dark"] .toast-success .toast-icon { color: #34d399; }
-@media (prefers-color-scheme: dark) {
-  html:not([data-theme]) .toast-success .toast-icon { color: #34d399; }
-}
 /* Left accent edge carries the type without relying on the icon alone. */
 .toast-success { border-left: 3px solid var(--color-success); }
 .toast-error { border-left: 3px solid var(--color-error); }

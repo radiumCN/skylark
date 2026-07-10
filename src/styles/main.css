@@ -17,7 +17,15 @@
   --color-primary-hover: #4f5cc9;
   --color-primary-active: #434fbe;
 
-  --color-success: #0e8f5a;   /* emerald — the "connected" hue */
+  /* emerald — the "connected" hue. @theme carries the LIGHT value (#0b7a4c ≈4.8:1 on the
+     off-white bg; #0e8f5a was ≈3.7:1, failing WCAG AA for the 11–12px text that uses it);
+     the dark blocks below restore the brighter emerald. */
+  --color-success: #0b7a4c;
+  /* Small SUCCESS/WARNING text (badges, toast icons, sidebar download figure): the fill
+     hues above are too dark to read on dark tinted surfaces, so text gets its own pair —
+     dark theme lifts them to #34d399 / #f0c044 (previously copy-pasted in 3 components). */
+  --color-success-text: #0b7a4c;
+  --color-warning-text: #6b5200;
   --color-warning: #e0a008;
   --color-error: #e5484d;
 
@@ -44,7 +52,9 @@
   --color-border: rgba(17, 20, 45, 0.09);
   --color-text: #16182a;
   --color-text-secondary: #565b70;
-  --color-text-muted: #8b90a4;
+  /* #676c82, not the old #8b90a4 (≈2.9:1): muted text renders at 11px in setting
+     descriptions / node addresses / sub URLs and must clear WCAG AA (≥4.5:1). */
+  --color-text-muted: #676c82;
 
   /* Ambient background wash (aurora blobs). Re-themed per mode below. */
   --aurora-1: rgba(94, 106, 210, 0.14);
@@ -66,6 +76,12 @@
 
   --sidebar-width: 220px;
 
+  /* Horizontal shell padding. .app-content and the full-bleed sticky bars (.toolbar,
+     .section-nav) that negate it with negative margins must agree on this value —
+     one token keeps all of them in lockstep (previously three hardcoded 24px sites
+     plus per-rule compact overrides). */
+  --content-pad-x: 24px;
+
   /* Unified content column for every page (full-width pages opt out via .page--wide). */
   --page-max: 960px;
 
@@ -75,14 +91,20 @@
   --z-modal: 1000;
   --z-toast: 1100;
 
+  /* Modal scrim — ONE value for every overlay dialog (previously four dialogs used four
+     different opacity/blur combos). Blur is fixed in .modal-overlay below. */
+  --scrim: rgba(0, 0, 0, 0.5);
+
   /* Attention orange — the app's "warn / mid / caution" hue (distinct from the
-     yellow --color-warning). Single source for the many places that used #ca5010. */
-  --color-attention: #d1741b;
+     yellow --color-warning). Single source for the many places that used #ca5010.
+     Light value #b45309 (≈4.5:1 for the 12px latency/warn text; the vivid #d1741b was
+     ≈3.05:1) — the dark blocks below restore #d1741b. */
+  --color-attention: #b45309;
 
   /* Latency / speed tiers (good → bad). Literal values so they resolve standalone
-     regardless of theme-var ordering. */
-  --latency-good: #0e8f5a;
-  --latency-mid: #d1741b;
+     regardless of theme-var ordering; light values here, dark overrides below. */
+  --latency-good: #0b7a4c;
+  --latency-mid: #b45309;
   --latency-bad: #e5484d;
 
   /* Decorative stat/icon accents (paired with a soft rgba background in components). */
@@ -100,6 +122,7 @@
   --space-8: 32px;
 
   /* Type scale. */
+  --fs-2xs: 10px;
   --fs-xs: 11px;
   --fs-sm: 12px;
   --fs-md: 13px;
@@ -117,7 +140,16 @@
     --color-border: rgba(255, 255, 255, 0.09);
     --color-text: #eceef6;
     --color-text-secondary: #a3a8bd;
-    --color-text-muted: #6b7085;
+    --color-text-muted: #7d8298;
+
+    /* Restore the vivid dark-theme hues (the @theme defaults are the darker,
+       light-theme-contrast values). */
+    --color-success: #0e8f5a;
+    --color-attention: #d1741b;
+    --latency-good: #0e8f5a;
+    --latency-mid: #d1741b;
+    --color-success-text: #34d399;
+    --color-warning-text: #f0c044;
 
     --aurora-1: rgba(94, 106, 210, 0.22);
     --aurora-2: rgba(124, 92, 236, 0.16);
@@ -137,7 +169,15 @@ html[data-theme="dark"] {
   --color-border: rgba(255, 255, 255, 0.09);
   --color-text: #eceef6;
   --color-text-secondary: #a3a8bd;
-  --color-text-muted: #6b7085;
+  --color-text-muted: #7d8298;
+
+  /* Restore the vivid dark-theme hues (see the prefers-color-scheme block above). */
+  --color-success: #0e8f5a;
+  --color-attention: #d1741b;
+  --latency-good: #0e8f5a;
+  --latency-mid: #d1741b;
+  --color-success-text: #34d399;
+  --color-warning-text: #f0c044;
 
   --aurora-1: rgba(94, 106, 210, 0.22);
   --aurora-2: rgba(124, 92, 236, 0.16);
@@ -157,7 +197,7 @@ html[data-theme="light"] {
   --color-border: rgba(17, 20, 45, 0.09);
   --color-text: #16182a;
   --color-text-secondary: #565b70;
-  --color-text-muted: #8b90a4;
+  --color-text-muted: #676c82;
 
   --aurora-1: rgba(94, 106, 210, 0.14);
   --aurora-2: rgba(124, 92, 236, 0.10);
@@ -187,13 +227,11 @@ html[data-density="compact"] {
   /* 200px, not less: the two-column traffic readout ellipsises a 3-digit
      "123.4 MB/s" below ~196px. */
   --sidebar-width: 200px;
+  /* Shell padding follows density; the full-bleed bars track it via the same token. */
+  --content-pad-x: 16px;
 }
 
-/* Shell. The two full-bleed bars below negate .app-content's side padding, so
-   their offsets must track it or they overhang the viewport. */
-html[data-density="compact"] .app-content { padding: 0 16px 16px; }
-html[data-density="compact"] .toolbar { margin: -16px -16px 0; padding: 16px 16px var(--space-3); }
-html[data-density="compact"] .section-nav { margin: 0 -16px; padding: 8px 16px; }
+html[data-density="compact"] .section-nav { padding-block: 8px; }
 
 html[data-density="compact"] .btn { padding: 5px 11px; }
 html[data-density="compact"] .input { padding: 6px 10px; }
@@ -312,6 +350,15 @@ textarea,
   white-space: nowrap;
 }
 .btn:active { transform: scale(0.97); }
+/* Disabled buttons must read as disabled everywhere (download/test/refresh states use
+   :disabled app-wide) — dim, no pointer affordance, and no hover/press feedback. */
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn:disabled:active { transform: none; }
+.btn-ghost:disabled:hover { background: transparent; }
+.btn-danger:disabled:hover { opacity: 0.5; }
 .btn-primary {
   background: var(--color-primary);
   color: white;
@@ -320,6 +367,7 @@ textarea,
 }
 .btn-primary:hover { background: var(--color-primary-hover); box-shadow: 0 4px 16px var(--color-primary-glow); }
 .btn-primary:active { background: var(--color-primary-active); }
+.btn-primary:disabled:hover { background: var(--color-primary); box-shadow: 0 2px 10px var(--color-primary-glow); }
 .btn-ghost {
   background: transparent;
   color: var(--color-text);
@@ -419,18 +467,11 @@ details[open] > summary::before { transform: rotate(45deg); }
   font-size: 11px;
   font-weight: 500;
 }
-.badge-green { background: var(--color-success-soft); color: var(--color-success); }
+.badge-green { background: var(--color-success-soft); color: var(--color-success-text); }
 .badge-red { background: var(--color-error-soft); color: var(--color-error); }
-.badge-yellow { background: var(--color-warning-soft); color: #6b5200; }
+.badge-yellow { background: var(--color-warning-soft); color: var(--color-warning-text); }
 .badge-blue { background: var(--color-primary-soft); color: var(--color-primary); }
 .badge-gray { background: var(--color-neutral-strong); color: var(--color-text-secondary); }
-/* Dark theme: dark amber/green text is unreadable on the tinted badge, lift it. */
-html[data-theme="dark"] .badge-yellow { color: #f0c044; }
-html[data-theme="dark"] .badge-green { color: #34d399; }
-@media (prefers-color-scheme: dark) {
-  html:not([data-theme]) .badge-yellow { color: #f0c044; }
-  html:not([data-theme]) .badge-green { color: #34d399; }
-}
 
 /* Shared spinner animation (used by refresh / loading icons via :class spin). */
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -450,9 +491,44 @@ html[data-theme="dark"] .badge-green { color: #34d399; }
 .btn:focus-visible,
 .nav-item:focus-visible,
 .mode-pill:focus-visible,
-.mode-btn:focus-visible {
+.mode-btn:focus-visible,
+.node-item:focus-visible,
+.rule-header:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
+}
+
+/* ============================================================================
+   Modal overlay + entrance — the single spec for every overlay dialog
+   (ConfirmDialog, QR share, node filters, add-rule, import-config).
+   Usage: <Transition name="modal-pop"><div class="modal-overlay"><div class="…dialog…">
+   The dialog panel must be the overlay's direct child (the > * selectors target it).
+   ============================================================================ */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+  background: var(--scrim);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+/* Scrim fades; dialog scales up from centre (spring-ish in, quick fade out). */
+.modal-pop-enter-active { transition: opacity 0.2s ease; }
+.modal-pop-leave-active { transition: opacity 0.15s ease; }
+.modal-pop-enter-active > * {
+  transition: transform 0.2s cubic-bezier(0.34, 1.4, 0.64, 1), opacity 0.2s ease;
+}
+.modal-pop-leave-active > * { transition: transform 0.15s ease, opacity 0.15s ease; }
+.modal-pop-enter-from,
+.modal-pop-leave-to { opacity: 0; }
+.modal-pop-enter-from > *,
+.modal-pop-leave-to > * {
+  opacity: 0;
+  transform: scale(0.94) translateY(6px);
 }
 
 /* Transition animations */

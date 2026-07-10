@@ -1,10 +1,26 @@
+<script lang="ts">
+import DOMPurify from "dompurify";
+
+// Any link surviving sanitization in a (remote, untrusted) release note must never navigate
+// the app's own webview in place — that would replace the UI with attacker-controlled content
+// in the privileged Tauri context. Force every anchor to open externally and drop the
+// opener's access to `window`. This plain <script> block runs once at module load (unlike
+// <script setup>, which re-runs per mount), so the hook is registered exactly once.
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.tagName === "A" && node.hasAttribute("href")) {
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noopener noreferrer");
+  }
+});
+</script>
+
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed, nextTick } from "vue";
 import {
   Shield, Globe, Cpu, Monitor, Download,
   RefreshCw, CheckCircle, AlertCircle, Package, ExternalLink,
   ShieldCheck, ShieldAlert, Check, Rocket, Zap, Save, Upload, Archive, Layers, Trash2,
-  FolderOpen
+  FolderOpen, Palette
 } from "@lucide/vue";
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -15,26 +31,19 @@ import { useAppStore, type AppConfig } from "../stores/app";
 import { useFeedbackStore } from "../stores/feedback";
 import { setLocale } from "../i18n";
 import { marked } from "marked";
-import DOMPurify from "dompurify";
 import { formatBytes } from "../utils/format";
 import { useTemporaryFlag } from "../composables/useTemporaryFlag";
+import { useModal } from "../composables/useModal";
 import ToggleSwitch from "../components/ToggleSwitch.vue";
 import Select from "../components/Select.vue";
 
 const store = useAppStore();
 const fb = useFeedbackStore();
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
-// Any link surviving sanitization in a (remote, untrusted) release note must never navigate
-// the app's own webview in place — that would replace the UI with attacker-controlled content
-// in the privileged Tauri context. Force every anchor to open externally and drop the
-// opener's access to `window`. Registered once at module load (idempotent across renders).
-DOMPurify.addHook("afterSanitizeAttributes", (node) => {
-  if (node.tagName === "A" && node.hasAttribute("href")) {
-    node.setAttribute("target", "_blank");
-    node.setAttribute("rel", "noopener noreferrer");
-  }
-});
+// (The release-note DOMPurify hook lives in the plain <script> block above: <script setup>
+// re-runs per mount, and addHook appends rather than replaces, so keeping it here stacked
+// one more identical hook onto every sanitize call per visit.)
 
 // Render release notes (GitHub release bodies) as Markdown. The source is remote, so the
 // generated HTML is always run through DOMPurify before it reaches v-html — never trust the
@@ -136,6 +145,7 @@ const localConfig = ref<AppConfig>({ ...store.config });
 const sections = [
   { id: "sec-update", key: "settings.appUpdate" },
   { id: "sec-kernel", key: "settings.kernelManagement" },
+  { id: "sec-appearance", key: "settings.appearance" },
   { id: "sec-system", key: "settings.systemBehavior" },
   { id: "sec-ports", key: "settings.portConfig" },
   { id: "sec-subscription", key: "settings.subscription" },
@@ -235,6 +245,11 @@ const exportingConfig = ref(false);
 const importingConfig = ref(false);
 const showImportModal = ref(false);
 const importText = ref("");
+const importDialogEl = ref<HTMLElement | null>(null);
+useModal(showImportModal, {
+  onClose: () => (showImportModal.value = false),
+  dialog: importDialogEl,
+});
 
 /** Export the full setup to a JSON file and reveal it in the file manager. */
 async function exportConfig() {
@@ -370,13 +385,16 @@ const downloadDone = ref(false);
 const hasUpdate = computed(() => {
   if (!latestRelease.value || !installedVersion.value) return false;
   const installed = installedVersion.value.match(/(\d+\.\d+\.\d+)/)?.[1] ?? "";
-  const latest = latestRelease.value.version.replace(/^v/, "");
-  return installed !== latest && installed !== "";
+  if (installed === "") return false;
+  // Strictly-newer comparison (like the app updater below), not `!==`: a manually
+  // installed beta kernel newer than the latest release must not flag a "downgrade update".
+  return isNewerVersion(latestRelease.value.version, installed);
 });
 
 const formatDate = (iso: string) => {
   if (!iso) return "";
-  return new Date(iso).toLocaleDateString("zh-CN", {
+  // Follow the active UI language — a hardcoded "zh-CN" showed "2026年7月10日" in English.
+  return new Date(iso).toLocaleDateString(locale.value, {
     year: "numeric", month: "long", day: "numeric",
   });
 };
@@ -405,6 +423,23 @@ async function checkUpdate(forceRefresh = false) {
   }
 }
 
+// Every event listener registered by this page goes through track(): listen() resolves
+// after awaits (or mid-download), so a fast navigate-away would otherwise leak the
+// listener — onUnmounted must be able to release whatever is live at that moment.
+let disposed = false;
+const liveUnlistens = new Set<() => void>();
+function track(un: () => void): () => void {
+  if (disposed) {
+    un();
+    return () => {};
+  }
+  liveUnlistens.add(un);
+  return () => {
+    liveUnlistens.delete(un);
+    un();
+  };
+}
+
 async function startDownload() {
   if (!latestRelease.value) return;
   downloading.value = true;
@@ -413,15 +448,15 @@ async function startDownload() {
   downloadDone.value = false;
 
   // Listen for progress events
-  const unlistenProgress = await listen<{
+  const unlistenProgress = track(await listen<{
     percent: number; downloaded: number; total: number;
   }>("singbox-download-progress", (event) => {
     downloadProgress.value = event.payload.percent;
     downloadedBytes.value = event.payload.downloaded;
     totalBytes.value = event.payload.total;
-  });
+  }));
 
-  const unlistenDone = await listen<{ success: boolean; message: string }>(
+  const unlistenDone = track(await listen<{ success: boolean; message: string }>(
     "singbox-download-done",
     async (event) => {
       if (event.payload.success) {
@@ -432,7 +467,7 @@ async function startDownload() {
       unlistenProgress();
       unlistenDone();
     }
-  );
+  ));
 
   try {
     await invoke("cmd_download_singbox", {
@@ -520,16 +555,16 @@ async function startAppDownload() {
   appDownloadError.value = "";
   appDownloadDone.value = false;
 
-  const unlistenProgress = await listen<{ percent: number; downloaded: number; total: number }>(
+  const unlistenProgress = track(await listen<{ percent: number; downloaded: number; total: number }>(
     "app-download-progress",
     (event) => {
       appDownloadProgress.value = event.payload.percent;
       appDownloadedBytes.value = event.payload.downloaded;
       appTotalBytes.value = event.payload.total;
     }
-  );
+  ));
 
-  const unlistenDone = await listen<{ success: boolean; message: string }>(
+  const unlistenDone = track(await listen<{ success: boolean; message: string }>(
     "app-download-done",
     (event) => {
       if (event.payload.success) {
@@ -539,7 +574,7 @@ async function startAppDownload() {
       unlistenProgress();
       unlistenDone();
     }
-  );
+  ));
 
   try {
     await invoke("cmd_download_app_update", {
@@ -555,8 +590,6 @@ async function startAppDownload() {
   }
 }
 
-let unlistenAppUpdate: (() => void) | null = null;
-
 onMounted(async () => {
   await Promise.all([
     refreshKernelStatus(),
@@ -564,13 +597,15 @@ onMounted(async () => {
     refreshProfiles(),
     getVersion().then((v) => (appVersion.value = v)),
   ]);
+  if (disposed) return;
 
   // Force a fresh check on every entry so the result reflects the latest release
   // rather than a stale value left over from a previous visit (bypasses the 1-hour cache).
   checkAppUpdate(true);
 
   // Also listen for the background checker's event (fired ~45s after launch).
-  unlistenAppUpdate = await listen<{
+  // track(): the awaits above mean this listener may register after an early unmount.
+  track(await listen<{
     version: string;
     download_url: string;
     release_notes: string;
@@ -591,11 +626,13 @@ onMounted(async () => {
       download_url: event.payload.download_url,
       is_prerelease: event.payload.is_prerelease,
     };
-  });
+  }));
 });
 
 onUnmounted(() => {
-  unlistenAppUpdate?.();
+  disposed = true;
+  liveUnlistens.forEach((un) => un());
+  liveUnlistens.clear();
 });
 </script>
 
@@ -839,6 +876,60 @@ onUnmounted(() => {
     </section>
 
     <!-- System Behavior -->
+    <!-- Appearance & language — the most-touched personalization settings live up top,
+         not buried at the tail of "Advanced". -->
+    <section id="sec-appearance" class="settings-section">
+      <div class="section-header">
+        <Palette :size="15" />
+        <span>{{ t('settings.appearance') }}</span>
+      </div>
+      <div class="card settings-card">
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">{{ t('settings.theme') }}</div>
+            <div class="setting-desc">{{ t('settings.themeDesc') }}</div>
+          </div>
+          <Select
+            v-model="localConfig.theme"
+            :options="[
+              { value: 'system', label: t('settings.themeSystem') },
+              { value: 'light', label: t('settings.themeLight') },
+              { value: 'dark', label: t('settings.themeDark') },
+            ]"
+          />
+        </div>
+        <div class="setting-divider" />
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">{{ t('settings.density') }}</div>
+            <div class="setting-desc">{{ t('settings.densityDesc') }}</div>
+          </div>
+          <Select
+            v-model="localConfig.density"
+            :options="[
+              { value: 'standard', label: t('settings.densityStandard') },
+              { value: 'compact', label: t('settings.densityCompact') },
+            ]"
+          />
+        </div>
+        <div class="setting-divider" />
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-label">{{ t('settings.language') }}</div>
+            <div class="setting-desc">{{ t('settings.languageDesc') }}</div>
+          </div>
+          <Select
+            v-model="localConfig.language"
+            :options="[
+              { value: 'zh-CN', label: t('settings.languageZh') },
+              { value: 'en', label: t('settings.languageEn') },
+            ]"
+            @update:model-value="onLanguageChange"
+          />
+        </div>
+      </div>
+    </section>
+
     <section id="sec-system" class="settings-section">
       <div class="section-header">
         <Monitor :size="15" />
@@ -904,14 +995,11 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.enableGlobalShortcuts') }}</div>
             <div class="setting-desc">{{ t('settings.enableGlobalShortcutsDesc') }}</div>
           </div>
-          <label class="toggle">
-            <input
-              type="checkbox"
-              v-model="localConfig.enable_global_shortcuts"
-              @change="store.applyGlobalShortcuts(localConfig.enable_global_shortcuts)"
-            />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch
+            :model-value="localConfig.enable_global_shortcuts"
+            :aria-label="t('settings.enableGlobalShortcuts')"
+            @update:model-value="(v: boolean) => { localConfig.enable_global_shortcuts = v; store.applyGlobalShortcuts(v); }"
+          />
         </div>
       </div>
     </section>
@@ -1144,10 +1232,7 @@ onUnmounted(() => {
             <div class="setting-label">{{ t('settings.enableTunMode') }}</div>
             <div class="setting-desc">{{ t('settings.enableTunModeDesc') }}</div>
           </div>
-          <label class="toggle">
-            <input type="checkbox" v-model="localConfig.tun_enabled" />
-            <span class="toggle-track" />
-          </label>
+          <ToggleSwitch v-model="localConfig.tun_enabled" :aria-label="t('settings.enableTunMode')" />
         </div>
 
         <!-- TUN requirements (show when enabled) -->
@@ -1307,50 +1392,6 @@ onUnmounted(() => {
         <div class="setting-divider" />
         <div class="setting-row">
           <div class="setting-info">
-            <div class="setting-label">{{ t('settings.theme') }}</div>
-            <div class="setting-desc">{{ t('settings.themeDesc') }}</div>
-          </div>
-          <Select
-            v-model="localConfig.theme"
-            :options="[
-              { value: 'system', label: t('settings.themeSystem') },
-              { value: 'light', label: t('settings.themeLight') },
-              { value: 'dark', label: t('settings.themeDark') },
-            ]"
-          />
-        </div>
-        <div class="setting-divider" />
-        <div class="setting-row">
-          <div class="setting-info">
-            <div class="setting-label">{{ t('settings.density') }}</div>
-            <div class="setting-desc">{{ t('settings.densityDesc') }}</div>
-          </div>
-          <Select
-            v-model="localConfig.density"
-            :options="[
-              { value: 'standard', label: t('settings.densityStandard') },
-              { value: 'compact', label: t('settings.densityCompact') },
-            ]"
-          />
-        </div>
-        <div class="setting-divider" />
-        <div class="setting-row">
-          <div class="setting-info">
-            <div class="setting-label">{{ t('settings.language') }}</div>
-            <div class="setting-desc">{{ t('settings.languageDesc') }}</div>
-          </div>
-          <Select
-            v-model="localConfig.language"
-            :options="[
-              { value: 'zh-CN', label: t('settings.languageZh') },
-              { value: 'en', label: t('settings.languageEn') },
-            ]"
-            @update:model-value="onLanguageChange"
-          />
-        </div>
-        <div class="setting-divider" />
-        <div class="setting-row">
-          <div class="setting-info">
             <div class="setting-label">{{ t('settings.autoCheckKernelUpdate') }}</div>
             <div class="setting-desc">{{ t('settings.autoCheckKernelUpdateDesc') }}</div>
           </div>
@@ -1389,8 +1430,9 @@ onUnmounted(() => {
     </div>
 
     <!-- Import config modal -->
-    <div v-if="showImportModal" class="dialog-overlay" @click.self="showImportModal = false">
-      <div class="dialog-card">
+    <Transition name="modal-pop">
+    <div v-if="showImportModal" class="modal-overlay" @click.self="showImportModal = false">
+      <div ref="importDialogEl" class="dialog-card" role="dialog" aria-modal="true" :aria-label="t('settings.importConfig')" tabindex="-1">
         <div class="dialog-title">{{ t('settings.importConfig') }}</div>
         <div class="dialog-hint">{{ t('settings.importDialogHint') }}</div>
         <textarea
@@ -1408,12 +1450,13 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+    </Transition>
   </div>
 </template>
 
 <style scoped>
 /* Network diagnostics (N5) */
-.diag-error { display: flex; align-items: center; gap: 6px; color: var(--color-error); font-size: 12.5px; padding: 4px 18px; }
+.diag-error { display: flex; align-items: center; gap: 6px; color: var(--color-error); font-size: var(--fs-md); padding: 4px 18px; }
 .diag-results { display: flex; flex-direction: column; gap: 8px; padding: 4px 18px 14px; }
 .diag-line { display: flex; gap: 10px; font-size: 13px; }
 .diag-key { color: var(--color-text-secondary); min-width: 70px; }
@@ -1430,7 +1473,7 @@ onUnmounted(() => {
    itself has padding:0, so direct children must supply their own inset). */
 .profile-save-row { display: flex; gap: 8px; align-items: center; padding: 12px 18px; }
 .profile-save-row .input { flex: 1; }
-.profile-empty { color: var(--color-text-secondary); font-size: 12.5px; padding: 4px 18px 14px; }
+.profile-empty { color: var(--color-text-secondary); font-size: var(--fs-md); padding: 4px 18px 14px; }
 .profile-list { display: flex; flex-direction: column; gap: 6px; padding: 2px 18px 14px; }
 .profile-item {
   display: flex; align-items: center; justify-content: space-between;
@@ -1457,8 +1500,9 @@ onUnmounted(() => {
   display: flex;
   gap: 6px;
   overflow-x: auto;
-  margin: 0 -24px;
-  padding: 10px 24px;
+  /* Full-bleed against .app-content's side padding — tracked via the shared token. */
+  margin: 0 calc(-1 * var(--content-pad-x));
+  padding: 10px var(--content-pad-x);
   background: var(--color-bg);
   border-bottom: 1px solid var(--color-border);
   scrollbar-width: none;
@@ -1516,28 +1560,6 @@ onUnmounted(() => {
 .version-unknown { color: var(--color-text-muted); font-style: italic; }
 .setting-divider { height: 1px; background: var(--color-border); margin: 0 18px; }
 
-/* Toggle Switch */
-.toggle { position: relative; display: inline-block; width: 42px; height: 24px; flex-shrink: 0; }
-.toggle input { opacity: 0; width: 0; height: 0; }
-.toggle-track {
-  position: absolute; inset: 0;
-  background: var(--color-neutral-strong); border-radius: 12px;
-  cursor: pointer; transition: background 0.2s ease-out, box-shadow 0.2s ease-out;
-}
-.toggle-track::before {
-  content: '';
-  position: absolute; left: 3px; top: 3px;
-  width: 18px; height: 18px; border-radius: 50%;
-  background: white; transition: transform 0.2s ease-out;
-  box-shadow: var(--shadow-sm);
-}
-.toggle input:checked + .toggle-track {
-  background: var(--color-primary);
-  box-shadow: 0 2px 8px var(--color-primary-glow);
-}
-.toggle input:checked + .toggle-track::before { transform: translateX(18px); }
-.toggle input:focus-visible + .toggle-track { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-
 .port-input { width: 100px; text-align: right; }
 
 /* ─── Kernel Card ─── */
@@ -1578,7 +1600,7 @@ onUnmounted(() => {
 .release-notes.markdown-body strong { color: var(--color-text-primary); font-weight: 600; }
 .release-notes.markdown-body code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px; padding: 1px 4px; border-radius: var(--radius-sm);
+  font-size: var(--fs-2xs); padding: 1px 4px; border-radius: var(--radius-sm);
   background: var(--color-neutral-strong);
 }
 .release-notes.markdown-body pre {
@@ -1682,12 +1704,8 @@ onUnmounted(() => {
   background: var(--color-neutral-strong);
 }
 
-/* Import config dialog */
-.dialog-overlay {
-  position: fixed; inset: 0; z-index: var(--z-modal);
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(0,0,0,0.4); backdrop-filter: blur(4px);
-}
+/* Import config dialog — overlay + entrance/exit come from the shared
+   .modal-overlay / modal-pop spec in main.css (this dialog previously hard-cut). */
 .dialog-card {
   width: min(560px, 92vw);
   background: var(--color-surface-strong); border: 1px solid var(--color-border);
@@ -1702,7 +1720,6 @@ onUnmounted(() => {
 
 @media (prefers-reduced-motion: reduce) {
   .setting-row, .profile-item,
-  .toggle-track, .toggle-track::before,
   .progress-bar-fill { transition: none; }
 }
 </style>

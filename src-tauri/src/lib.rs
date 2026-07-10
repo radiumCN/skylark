@@ -152,6 +152,7 @@ pub fn run() {
         app_config: Mutex::new(app_config),
         core_lock: tokio::sync::Mutex::new(()),
         switching: std::sync::atomic::AtomicBool::new(false),
+        shutting_down: std::sync::atomic::AtomicBool::new(false),
     };
 
     tauri::Builder::default()

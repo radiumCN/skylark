@@ -108,10 +108,15 @@ const proxyModeLabel = computed(() => {
   return map[store.config.proxy_mode] ?? store.config.proxy_mode;
 });
 
+// True once onUnmounted has run. The interval below is created AFTER awaits in onMounted,
+// so a fast navigate-away would otherwise see a null pollTimer during cleanup and the
+// later-created interval would tick (two IPCs per second) forever.
+let disposed = false;
 onMounted(async () => {
   // Fetch the real state first, then enable transitions to avoid the initial "flash" animation.
   await fetchSystemProxy();
   await nextTick();
+  if (disposed) return;
   systemProxyReady.value = true;
 
   // Shared pollers (status + active node + traffic totals) run at app scope. The traffic
@@ -142,6 +147,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  disposed = true;
   if (pollTimer) clearInterval(pollTimer);
 });
 </script>

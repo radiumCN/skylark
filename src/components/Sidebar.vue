@@ -231,14 +231,10 @@ onMounted(() => {
   font-weight: 600;
 }
 .traffic-cell.up { color: var(--color-primary); }
-.traffic-cell.down { color: var(--color-success); }
+/* --color-success-text lifts the emerald on dark surfaces (theme-split in main.css). */
+.traffic-cell.down { color: var(--color-success-text); }
 .traffic-cell svg { flex-shrink: 0; }
 .traffic-val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Dark surfaces need a brighter emerald for the download figure to stay legible. */
-html[data-theme="dark"] .traffic-cell.down { color: #34d399; }
-@media (prefers-color-scheme: dark) {
-  html:not([data-theme]) .traffic-cell.down { color: #34d399; }
-}
 .traffic-enter-active, .traffic-leave-active {
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
@@ -272,7 +268,7 @@ html[data-theme="dark"] .traffic-cell.down { color: #34d399; }
 }
 .update-badge {
   margin-left: auto;
-  font-size: 10px; font-weight: 700;
+  font-size: var(--fs-2xs); font-weight: 700;
   padding: 1px 6px; border-radius: 100px;
   background: var(--color-error-soft); color: var(--color-error);
 }

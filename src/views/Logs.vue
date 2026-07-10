@@ -88,18 +88,28 @@ async function exportLogs() {
 
 watch(filtered, scrollToBottom);
 
+// True once onUnmounted has run. The listen() below resolves AFTER awaits in onMounted,
+// so a fast navigate-away would otherwise register the listener after cleanup already
+// looked at a null handle — leaking it (plus this component's log buffer) forever.
+let disposed = false;
 onMounted(async () => {
   // Load the current buffer once, then receive new lines incrementally via events
   // instead of re-cloning the whole buffer on a timer.
   await fetchLogs();
-  unlistenLog = await listen<string>("singbox-log", (e) => {
+  const un = await listen<string>("singbox-log", (e) => {
     logs.value.push(e.payload);
     if (logs.value.length > LOG_CAP) {
       logs.value.splice(0, logs.value.length - LOG_CAP);
     }
   });
+  if (disposed) {
+    un();
+    return;
+  }
+  unlistenLog = un;
 });
 onUnmounted(() => {
+  disposed = true;
   if (unlistenLog) unlistenLog();
 });
 </script>
@@ -132,7 +142,7 @@ onUnmounted(() => {
           <Download :size="14" />
           {{ exporting ? t('logs.exporting') : t('logs.export') }}
         </button>
-        <button class="btn btn-ghost clear-btn" @click="logs = []" :title="t('logs.clear')">
+        <button class="btn btn-ghost clear-btn" @click="logs = []" :title="t('logs.clear')" :aria-label="t('logs.clear')">
           <Trash2 :size="14" />
         </button>
       </div>
@@ -195,5 +205,7 @@ onUnmounted(() => {
   word-break: break-all;
   transition: background 0.12s;
 }
-.log-line:hover { background: rgba(255,255,255,0.04); }
+/* Theme token, not a hardcoded white wash — rgba(255,255,255,.04) was invisible on the
+   light theme's near-white background. */
+.log-line:hover { background: var(--color-neutral-soft); }
 </style>

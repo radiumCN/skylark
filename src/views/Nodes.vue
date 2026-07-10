@@ -363,10 +363,10 @@ const autoNowName = computed(() => store.activeNodeNow);
             <button class="btn btn-ghost btn-sm" @click="useGroup(g.name)">
               {{ store.activeProxyTag === g.name ? t("nodes.inUse") : t("nodes.useGroup") }}
             </button>
-            <button class="icon-btn" :title="t('nodes.edit')" @click="openEditGroup(g)">
+            <button class="icon-btn" :title="t('nodes.edit')" :aria-label="t('nodes.edit')" @click="openEditGroup(g)">
               <Pencil :size="14" />
             </button>
-            <button class="icon-btn danger" :title="t('nodes.delete')" @click="deleteGroup(g.id)">
+            <button class="icon-btn danger" :title="t('nodes.delete')" :aria-label="t('nodes.delete')" @click="deleteGroup(g.id)">
               <Trash2 :size="14" />
             </button>
           </div>
@@ -440,7 +440,12 @@ const autoNowName = computed(() => store.activeNodeNow);
         v-if="showAutoCard"
         class="card node-item auto-item"
         :class="{ active: store.activeProxyTag === currentAutoTag }"
+        role="button"
+        tabindex="0"
+        :aria-pressed="store.activeProxyTag === currentAutoTag"
         @click="selectAuto(filterSubId === 'all' ? undefined : filterSubId)"
+        @keydown.enter.prevent="selectAuto(filterSubId === 'all' ? undefined : filterSubId)"
+        @keydown.space.prevent="selectAuto(filterSubId === 'all' ? undefined : filterSubId)"
         :title="t('nodes.autoCardTip')"
       >
         <div class="node-left">
@@ -468,6 +473,7 @@ const autoNowName = computed(() => store.activeNodeNow);
             :disabled="testingGroup || !store.status.running"
             @click.stop="retestGroup"
             :title="store.status.running ? t('nodes.retestGroupTip') : t('nodes.needStartProxy')"
+            :aria-label="t('nodes.retestGroupTip')"
           >
             <RefreshCw :size="13" :class="{ spin: testingGroup }" />
           </button>
@@ -479,7 +485,12 @@ const autoNowName = computed(() => store.activeNodeNow);
         :key="node.id"
         class="card node-item"
         :class="{ active: node.is_active }"
+        role="button"
+        tabindex="0"
+        :aria-pressed="node.is_active"
         @click="selectNode(node.id)"
+        @keydown.enter.prevent="selectNode(node.id)"
+        @keydown.space.prevent="selectNode(node.id)"
       >
         <div class="node-left">
           <div class="active-indicator">
@@ -546,8 +557,10 @@ const autoNowName = computed(() => store.activeNodeNow);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  margin: -24px -24px 0;
-  padding: 24px 24px var(--space-3);
+  /* Negate .page's top padding (--space-6) and .app-content's side padding
+     (--content-pad-x) so the sticky bar runs full-bleed; density follows the tokens. */
+  margin: calc(-1 * var(--space-6)) calc(-1 * var(--content-pad-x)) 0;
+  padding: var(--space-6) var(--content-pad-x) var(--space-3);
   background: var(--color-bg);
   border-bottom: 1px solid var(--color-border);
 }
@@ -563,7 +576,7 @@ const autoNowName = computed(() => store.activeNodeNow);
 /* Subscription selector reuses the segmented control; may wrap when many subs. */
 .sub-segmented { flex-wrap: wrap; }
 .sub-count {
-  font-size: 10px; font-weight: 700;
+  font-size: var(--fs-2xs); font-weight: 700;
   background: var(--color-neutral-strong); color: var(--color-text-secondary);
   border-radius: var(--radius-sm); padding: 0 5px; min-width: 18px; text-align: center;
 }
@@ -624,7 +637,7 @@ const autoNowName = computed(() => store.activeNodeNow);
   margin-right: 6px; vertical-align: middle; flex-shrink: 0;
 }
 .node-meta { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
-.protocol-badge { font-size: 10px; padding: 1px 6px; }
+.protocol-badge { font-size: var(--fs-2xs); padding: 1px 6px; }
 .node-server { font-size: 11px; color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .node-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -660,7 +673,7 @@ const autoNowName = computed(() => store.activeNodeNow);
 }
 .group-title:hover { color: var(--color-primary); }
 .group-count {
-  font-size: 10px; font-weight: 700;
+  font-size: var(--fs-2xs); font-weight: 700;
   background: var(--color-neutral-strong); color: var(--color-text-secondary);
   border-radius: var(--radius-sm); padding: 0 5px; min-width: 18px; text-align: center;
 }
@@ -689,7 +702,7 @@ const autoNowName = computed(() => store.activeNodeNow);
 .group-info { min-width: 0; }
 .group-name { font-size: var(--fs-md); font-weight: 600; display: flex; align-items: center; gap: 6px; }
 .group-badge {
-  font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: var(--radius-sm);
+  font-size: var(--fs-2xs); font-weight: 600; padding: 1px 7px; border-radius: var(--radius-sm);
   background: var(--color-warning-soft); color: var(--accent-amber);
 }
 .group-members { font-size: 11px; color: var(--color-text-muted); margin-top: 2px; }

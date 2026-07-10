@@ -48,7 +48,7 @@ pub fn subscription_user_agent() -> String {
 }
 
 pub fn app_data_dir() -> PathBuf {
-    let base = dirs_next::data_local_dir()
+    let base = dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."));
     base.join("Skylark")
 }

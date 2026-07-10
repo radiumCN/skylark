@@ -1,7 +1,7 @@
 [package]
 name = "skylark"
 version = "0.5.4"
-description = "Skylark — cross-platform (Windows / macOS) GUI proxy client powered by sing-box"
+description = "Skylark — cross-platform (Windows / macOS / Linux) GUI proxy client powered by sing-box"
 authors = ["radium"]
 edition = "2021"
 
@@ -36,7 +36,9 @@ log = "0.4"
 regex = "1"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-dirs-next = "2"
+# dirs, not dirs-next: dirs-next is unmaintained; dirs is the maintained successor with
+# the same API for the one call we make (data_local_dir).
+dirs = "6"
 zip = "2"
 flate2 = "1"
 tar = "0.4"

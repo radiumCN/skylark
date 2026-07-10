@@ -28,6 +28,12 @@ pub struct AppState {
     /// rapid on/off clicks queues a stack of real toggles that flap the TUN adapter. The
     /// tray handler test-and-sets this and drops clicks that arrive mid-switch.
     pub switching: std::sync::atomic::AtomicBool,
+    /// Set (permanently) once app-exit / updater teardown begins. The core (re)start paths
+    /// check it so a mode switch queued on `core_lock` behind the shutdown can't spawn a
+    /// fresh core afterwards — `process::exit` skips destructors, so that core would outlive
+    /// the app as an orphan, possibly holding a TUN adapter with the system proxy already
+    /// cleared (a machine-wide black hole until the next launch reaps it).
+    pub shutting_down: std::sync::atomic::AtomicBool,
 }
 
 /// RAII guard for [`AppState::switching`]. [`SwitchGuard::acquire`] test-and-sets the flag,
@@ -103,6 +109,11 @@ async fn ensure_core_inner(
     state: &AppState,
     want_tun: bool,
 ) -> Result<(), String> {
+    // App is exiting: never (re)start the core — see AppState::shutting_down.
+    if state.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("应用正在退出，已取消本次操作".to_string());
+    }
+
     // TUN preconditions differ by platform:
     //   • macOS — a one-time privileged service (passwordless sudo for the root-owned core)
     //     must be installed; the GUI itself stays non-root.
@@ -155,7 +166,9 @@ async fn ensure_core_inner(
     let config_path = config::singbox_config_path();
     config::ensure_dirs().map_err(|e| e.to_string())?;
     let cfg_json = serde_json::to_string_pretty(&singbox_cfg).map_err(|e| e.to_string())?;
-    std::fs::write(&config_path, cfg_json).map_err(|e| e.to_string())?;
+    // write_atomic, not fs::write: this file carries every node's credentials plus the
+    // Clash API secret, so it must be owner-only (0600) on Unix like the other secret files.
+    config::write_atomic(&config_path, cfg_json.as_bytes()).map_err(|e| e.to_string())?;
 
     // Restart: the running instance uses the PREVIOUS tun setting, so a graceful
     // (adapter-cleanup) shutdown is only needed when it was previously in TUN mode.
@@ -289,6 +302,29 @@ pub async fn apply_connection_mode(
             drop(cfg);
             let _ = config::save_app_config(&cfg_clone);
         }
+        // Fail SAFE, not dangerous: distinguish "early failure, old core untouched" (TUN
+        // precondition missing — the previous session keeps working, leave it alone) from
+        // "failed after the old core was already stopped" (new core wouldn't start). In the
+        // latter case the OS proxy may still point at the now-dead mixed port — a machine-wide
+        // black hole until the user toggles again. Clear it, persist the off-state so a
+        // restart doesn't restore a broken session, and best-effort bring back an idle core.
+        let core_running = state
+            .singbox_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .running;
+        if !core_running {
+            clear_system_proxy_logged();
+            {
+                let mut cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
+                cfg.last_proxy_running = false;
+                cfg.last_system_proxy = false;
+                let cfg_clone = cfg.clone();
+                drop(cfg);
+                let _ = config::save_app_config(&cfg_clone);
+            }
+            let _ = ensure_core_inner(app_handle, state, false).await;
+        }
         return Err(e);
     }
 
@@ -359,6 +395,12 @@ pub async fn cmd_set_connection_mode(
 /// exit look like "user turned proxy off" and silently break restore-on-startup — do not "fix"
 /// this by persisting an off-state on exit.
 pub async fn shutdown_core(state: &AppState) {
+    // Refuse further core starts, then serialize with any in-flight mode switch via
+    // core_lock. Without the lock, exiting mid-switch reads `running=false` in the window
+    // between the switch's stop and start, returns immediately, and the switch then spawns
+    // a core that outlives the exiting process (see `shutting_down`).
+    state.shutting_down.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _guard = state.core_lock.lock().await;
     let graceful = {
         let s = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner());
         s.running && s.tun_mode
@@ -375,6 +417,9 @@ pub async fn shutdown_core(state: &AppState) {
 /// stop during an update anyway — the updater removes the TUN adapter deterministically via
 /// `tun::cleanup_stale_tun_adapter` — so a force kill is both safe and avoids self-termination.
 pub async fn shutdown_core_forced(state: &AppState) {
+    // Same shutdown ordering as `shutdown_core` (flag + core_lock) — see the note there.
+    state.shutting_down.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _guard = state.core_lock.lock().await;
     let _ = stop_singbox(state.singbox_state.clone(), false).await;
     clear_system_proxy_logged();
 }
@@ -615,9 +660,31 @@ fn profiles_dir() -> std::path::PathBuf {
 
 /// Validate a user-supplied profile name: non-empty and free of path separators / traversal
 /// so it can only ever map to a file directly inside `profiles/`.
+///
+/// Beyond `/ \ ..`, Windows needs more: a `:` makes `PathBuf::join("C:evil.json")` a
+/// drive-relative path that REPLACES the profiles dir entirely (escaping it), or an NTFS
+/// alternate data stream; `* ? " < > |` and control chars are invalid in filenames; device
+/// names (CON, NUL, COM1…) are reserved even with an extension; trailing dots/spaces are
+/// silently stripped by the filesystem, aliasing two "different" names to one file.
 fn sanitize_profile_name(name: &str) -> Option<String> {
     let n = name.trim();
-    if n.is_empty() || n.len() > 64 || n.contains('/') || n.contains('\\') || n.contains("..") {
+    if n.is_empty() || n.len() > 64 || n.contains("..") {
+        return None;
+    }
+    if n.chars().any(|c| {
+        matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control()
+    }) {
+        return None;
+    }
+    if n.ends_with('.') {
+        return None;
+    }
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let stem = n.split('.').next().unwrap_or(n);
+    if RESERVED.iter().any(|r| stem.eq_ignore_ascii_case(r)) {
         return None;
     }
     Some(n.to_string())
@@ -638,7 +705,8 @@ pub fn cmd_export_config(state: State<'_, AppState>) -> Result<String, String> {
     );
     let path = dir.join(filename);
     let data = serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())?;
-    std::fs::write(&path, data).map_err(|e| e.to_string())?;
+    // write_atomic: the bundle embeds full node credentials — owner-only on Unix.
+    config::write_atomic(&path, data.as_bytes()).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -682,7 +750,9 @@ pub fn cmd_save_profile(name: String, state: State<'_, AppState>) -> Result<(), 
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let bundle = build_config_bundle(state.inner());
     let data = serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join(format!("{}.json", name)), data).map_err(|e| e.to_string())?;
+    // write_atomic: the bundle embeds full node credentials — owner-only on Unix.
+    config::write_atomic(&dir.join(format!("{}.json", name)), data.as_bytes())
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1319,6 +1389,10 @@ async fn rebuild_and_restart_core(
     app_handle: &tauri::AppHandle,
     state: &AppState,
 ) -> Result<(), String> {
+    // App is exiting: never (re)start the core — see AppState::shutting_down.
+    if state.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("应用正在退出，已取消本次操作".to_string());
+    }
     let (config, outbounds, nodes) = {
         let config = state.app_config.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let outbounds = state.outbounds.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -1336,7 +1410,8 @@ async fn rebuild_and_restart_core(
     let config_path = config::singbox_config_path();
     config::ensure_dirs().map_err(|e| e.to_string())?;
     let cfg_json = serde_json::to_string_pretty(&singbox_cfg).map_err(|e| e.to_string())?;
-    std::fs::write(&config_path, cfg_json).map_err(|e| e.to_string())?;
+    // write_atomic: credentials + API secret inside — keep it 0600 (see ensure_core_inner).
+    config::write_atomic(&config_path, cfg_json.as_bytes()).map_err(|e| e.to_string())?;
 
     let (running, current_tun) = {
         let s = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner());
@@ -1344,7 +1419,7 @@ async fn rebuild_and_restart_core(
     };
     if running {
         let _ = stop_singbox(state.singbox_state.clone(), current_tun).await;
-        start_singbox(
+        if let Err(e) = start_singbox(
             app_handle,
             &config_path,
             state.singbox_state.clone(),
@@ -1352,7 +1427,21 @@ async fn rebuild_and_restart_core(
             current_tun,
         )
         .await
-        .map_err(|e| e.to_string())?;
+        {
+            // The old core is already gone and the rebuilt one wouldn't start: the OS proxy
+            // would keep pointing at a dead mixed port (machine-wide black hole). Fail safe —
+            // clear it and persist the off-state so the next launch doesn't restore a broken
+            // session. (No idle-core retry here: the config content itself was rejected, so
+            // an identical rebuild would fail the same way.)
+            clear_system_proxy_logged();
+            let mut cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
+            cfg.last_proxy_running = false;
+            cfg.last_system_proxy = false;
+            let cfg_clone = cfg.clone();
+            drop(cfg);
+            let _ = config::save_app_config(&cfg_clone);
+            return Err(e.to_string());
+        }
         if let Some(m) = clash_mode_str(&config.proxy_mode) {
             if let Err(e) = clash_set_mode_verified(config.api_port, m).await {
                 log::warn!("核心重建后同步代理模式失败：{}", e);
@@ -2388,5 +2477,21 @@ mod tests {
         assert_eq!(sanitize_profile_name("a/b"), None);
         assert_eq!(sanitize_profile_name("a\\b"), None);
         assert_eq!(sanitize_profile_name(&"x".repeat(65)), None);
+        // Windows: a drive-relative `C:…` escapes profiles/ entirely via PathBuf::join;
+        // `name:stream` writes an NTFS alternate data stream.
+        assert_eq!(sanitize_profile_name("C:evil"), None);
+        assert_eq!(sanitize_profile_name("a:b"), None);
+        // Windows invalid filename characters and control chars.
+        assert_eq!(sanitize_profile_name("a*b"), None);
+        assert_eq!(sanitize_profile_name("a?b"), None);
+        assert_eq!(sanitize_profile_name("a\tb"), None);
+        // Windows reserved device names, with or without an extension, any case.
+        assert_eq!(sanitize_profile_name("CON"), None);
+        assert_eq!(sanitize_profile_name("nul.backup"), None);
+        assert_eq!(sanitize_profile_name("Com1"), None);
+        // Trailing dot is stripped by the Windows filesystem (name aliasing).
+        assert_eq!(sanitize_profile_name("backup."), None);
+        // Interior dots stay legal.
+        assert_eq!(sanitize_profile_name("v0.5.4").as_deref(), Some("v0.5.4"));
     }
 }

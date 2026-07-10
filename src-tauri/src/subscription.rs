@@ -2043,7 +2043,11 @@ fn build_inbounds(config: &crate::types::AppConfig) -> Vec<Value> {
 /// Build the TUN inbound. The TUN is ALWAYS dual-stack (IPv4 + IPv6 address), regardless of
 /// the `enable_ipv6` toggle. On Windows a unique per-start interface name avoids WinTun
 /// collisions with adapters orphaned by a previous crash.
-fn build_tun_inbound(_config: &crate::types::AppConfig) -> Value {
+///
+/// `enable_ipv6` is the EFFECTIVE flag (user toggle AND working host IPv6 egress). When it
+/// is off, global-unicast IPv6 (`2000::/3`) is excluded from auto_route — see the comment
+/// inside for why the DNS-layer gate alone is not enough.
+fn build_tun_inbound(enable_ipv6: bool) -> Value {
     // Always assign an IPv6 TUN address so the tunnel stays dual-stack even when the IPv6
     // feature is "off". This is deliberate: `strict_route: true` makes any address family
     // NOT present on the TUN "unreachable" (sing-box docs: "Let unsupported network
@@ -2069,6 +2073,20 @@ fn build_tun_inbound(_config: &crate::types::AppConfig) -> Value {
         "strict_route": true,
         "stack": "system"
     });
+
+    // When effective IPv6 is off, keep the dual-stack TUN but exclude global-unicast
+    // IPv6 (2000::/3) from auto_route. The DNS-layer gate (ipv4_only, no AAAA) does not
+    // cover apps that dial IPv6 literals from their own dispatch protocol — WeChat's
+    // scheduler hands out `240e::` server IPs directly. With a routable ::/0 via the TUN,
+    // the system stack completes the local TCP handshake BEFORE the upstream dial fails
+    // ("unreachable network" on a v4-only host), so WeChat sees "connected then dropped"
+    // and never falls back to IPv4 — image upload/avatar download break. Excluding
+    // 2000::/3 removes the OS route entirely: connect() fails instantly, Happy Eyeballs
+    // falls back to IPv4. Loopback (::1), ULA and link-local stay on the TUN, preserving
+    // the localhost fix that motivated the always-dual-stack address above.
+    if !enable_ipv6 {
+        tun_in["route_exclude_address"] = json!(["2000::/3"]);
+    }
 
     // On Windows, use a unique interface name per start. If a previous run crashed
     // and left an orphaned adapter behind, a fresh name avoids the WinTun "Cannot
@@ -2281,7 +2299,7 @@ pub fn build_singbox_config(
     });
 
     if config.tun_enabled {
-        let tun_in = build_tun_inbound(config);
+        let tun_in = build_tun_inbound(enable_ipv6);
         cfg["inbounds"].as_array_mut().unwrap().push(tun_in);
     }
 
@@ -2765,6 +2783,7 @@ mod tests {
         // path. Effective config must match the IPv4-only path exactly.
         let mut cfg = crate::types::AppConfig::default();
         cfg.enable_ipv6 = true;
+        cfg.tun_enabled = true;
         let result = build_singbox_config(&[], &cfg, None, &[], false);
 
         assert_eq!(result["dns"]["strategy"], "ipv4_only");
@@ -2772,6 +2791,16 @@ mod tests {
             dns_server(&result, "dns_fakeip")["inet6_range"].is_null(),
             "fakeip must not expose an inet6_range when the host has no IPv6 egress"
         );
+
+        // The TUN must also drop the global-unicast IPv6 route: the DNS gate alone
+        // cannot stop apps (WeChat) that dial 240e:: literals from their own dispatch.
+        let tun = result["inbounds"]
+            .as_array()
+            .expect("inbounds array")
+            .iter()
+            .find(|i| i["type"] == "tun")
+            .expect("tun inbound present when tun_enabled");
+        assert_eq!(tun["route_exclude_address"], json!(["2000::/3"]));
     }
 
     #[test]
@@ -2987,9 +3016,7 @@ mod tests {
     fn build_tun_inbound_always_dual_stack() {
         // The TUN must be dual-stack irrespective of the IPv6 toggle: an IPv4-only TUN
         // with strict_route black-holes IPv6 (incl. ::1 loopback), breaking localhost.
-        let mut cfg = crate::types::AppConfig::default();
-        cfg.enable_ipv6 = false;
-        let off = build_tun_inbound(&cfg);
+        let off = build_tun_inbound(false);
         assert_eq!(
             off["address"].as_array().unwrap().len(),
             2,
@@ -2998,9 +3025,30 @@ mod tests {
         assert_eq!(off["mtu"], 9000);
         assert_eq!(off["strict_route"], true);
 
-        cfg.enable_ipv6 = true;
-        let on = build_tun_inbound(&cfg);
+        let on = build_tun_inbound(true);
         assert_eq!(on["address"].as_array().unwrap().len(), 2, "dual-stack address");
+    }
+
+    #[test]
+    fn build_tun_inbound_excludes_global_ipv6_when_off() {
+        // IPv6 off: WeChat-style apps dial IPv6 literals from their own dispatch (no DNS
+        // involved). Without an OS-level route exclusion the TUN's system stack accepts
+        // the handshake, the direct dial then fails on a v4-only host, and the app never
+        // falls back to IPv4 (broken image upload / avatar download). 2000::/3 must be
+        // excluded from auto_route so connect() fails instantly and fallback works.
+        let off = build_tun_inbound(false);
+        assert_eq!(
+            off["route_exclude_address"],
+            json!(["2000::/3"]),
+            "global-unicast IPv6 must be excluded from auto_route when IPv6 is off"
+        );
+
+        // IPv6 on (and host egress verified): no exclusion — full dual-stack routing.
+        let on = build_tun_inbound(true);
+        assert!(
+            on.get("route_exclude_address").is_none(),
+            "no exclusion when effective IPv6 is on"
+        );
     }
 
     // ─── N2: node filtering / region grouping ──────────────────────────

@@ -8,6 +8,10 @@ import { detectLocale } from "../i18n";
 
 export interface SingboxStatus {
   running: boolean;
+  // Authoritative "core is actually in TUN mode right now" flag from the backend
+  // (running && tun_mode). Use this for the TUN indicator — never the persisted
+  // config.tun_enabled preference, which does not mean a tunnel was established.
+  tun_active?: boolean;
   uptime?: number;
   pid?: number;
   version?: string;
@@ -169,7 +173,11 @@ export const useAppStore = defineStore("app", () => {
   const proxying = computed(() => {
     if (connecting.value === "system" || connecting.value === "tun") return true;
     if (connecting.value === "off") return false;
-    return status.value.running && (config.value.tun_enabled || systemProxyEnabled.value);
+    // Derive from the backend's authoritative runtime state — the core is actually in TUN
+    // mode, or the system proxy registry toggle is on — NOT from the persisted
+    // config.tun_enabled preference (which the Settings toggle can flip on without ever
+    // establishing a tunnel, falsely showing "connected" while traffic goes direct).
+    return status.value.running && (status.value.tun_active === true || systemProxyEnabled.value);
   });
 
   // Wall-clock ms at which the current proxy session began (off → on), or null while not
@@ -278,14 +286,18 @@ export const useAppStore = defineStore("app", () => {
     try { await unregisterAll(); } catch { /* nothing registered yet */ }
     if (!enabled) return;
     try {
+      // Drop hotkey presses while a switch is already applying. The dashboard toggles are
+      // guarded by :disabled="loading", but these handlers bypass that UI, so without the
+      // guard a burst of presses (or key auto-repeat) stacks overlapping connection switches
+      // that flip-flop the optimistic state and flap the TUN adapter.
       await register(SHORTCUT_TOGGLE_PROXY, (e) => {
-        if (e.state === "Pressed") setConnectionMode(systemProxyEnabled.value ? "off" : "system");
+        if (e.state === "Pressed" && !loading.value) setConnectionMode(systemProxyEnabled.value ? "off" : "system");
       });
       await register(SHORTCUT_TOGGLE_TUN, (e) => {
-        if (e.state === "Pressed") setConnectionMode(config.value.tun_enabled ? "off" : "tun");
+        if (e.state === "Pressed" && !loading.value) setConnectionMode(config.value.tun_enabled ? "off" : "tun");
       });
       await register(SHORTCUT_CYCLE_MODE, (e) => {
-        if (e.state !== "Pressed") return;
+        if (e.state !== "Pressed" || loading.value) return;
         const m = config.value.proxy_mode;
         const next = m === "rule" ? "global" : m === "global" ? "direct" : "rule";
         setProxyMode(next);
@@ -367,6 +379,25 @@ export const useAppStore = defineStore("app", () => {
     if (idx !== -1) subscriptions.value[idx] = sub;
     await fetchNodes();
     return sub;
+  }
+
+  // Refresh every subscription concurrently, then fetch the node list ONCE. Calling
+  // updateSubscription per-sub in parallel would fire N overlapping cmd_get_nodes whose
+  // last-to-RESOLVE (not last-issued) wins, so an early response could overwrite the node
+  // list with a set missing later-finishing subs' nodes. Returns the count of failures so
+  // the caller can surface them. `rejected` carries the sub id + error for reporting.
+  async function refreshAllSubscriptions() {
+    const settled = await Promise.allSettled(
+      subscriptions.value.map((s) =>
+        invoke<Subscription>("cmd_update_subscription", { id: s.id }).then((sub) => {
+          const idx = subscriptions.value.findIndex((x) => x.id === s.id);
+          if (idx !== -1) subscriptions.value[idx] = sub;
+        })
+      )
+    );
+    await fetchNodes();
+    const rejected = settled.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
+    return { failed: rejected.length, errors: rejected.map((r) => String(r.reason)) };
   }
 
   async function deleteSubscription(id: string) {
@@ -523,15 +554,31 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
+  // Guards against re-entrant ticks: each poll awaits three IPC round-trips, so under a slow
+  // core a 1s interval can fire again before the previous run finishes. Overlapping runs would
+  // read the same stale baseline and both record a large delta, inflating live speed and the
+  // persistent daily history. Drop a tick if the previous one is still in flight.
+  let trafficPolling = false;
   async function pollTraffic() {
+    if (trafficPolling) return;
+    trafficPolling = true;
+    try {
+      await pollTrafficInner();
+    } finally {
+      trafficPolling = false;
+    }
+  }
+
+  async function pollTrafficInner() {
     // Refresh status + system proxy here so the monitor reacts to changes from anywhere
     // (dashboard, tray, auto-restore) without depending on a mounted page.
     await fetchStatus();
     await refreshSystemProxy();
 
     // With the persistent core, "proxying" — not "core running" — is what gates traffic.
+    // Use the backend's authoritative tun_active, not the persisted config.tun_enabled.
     const proxyingNow =
-      status.value.running && (config.value.tun_enabled || systemProxyEnabled.value);
+      status.value.running && (status.value.tun_active === true || systemProxyEnabled.value);
 
     if (!proxyingNow) {
       if (trafficWasRunning) {
@@ -792,6 +839,7 @@ export const useAppStore = defineStore("app", () => {
     loadProfile,
     deleteProfile,
     updateSubscription,
+    refreshAllSubscriptions,
     deleteSubscription,
     saveSubscriptionSettings,
     fetchNodes,

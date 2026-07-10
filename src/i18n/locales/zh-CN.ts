@@ -69,6 +69,7 @@ export default {
   subscriptions: {
     title: "订阅管理",
     refreshAll: "全部更新",
+    refreshAllFailed: "{count} 个订阅更新失败",
     updating: "更新中...",
     add: "添加订阅",
     empty: "暂无订阅",

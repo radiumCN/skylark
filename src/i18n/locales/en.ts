@@ -68,6 +68,7 @@ export default {
   subscriptions: {
     title: "Subscriptions",
     refreshAll: "Update All",
+    refreshAllFailed: "{count} subscription(s) failed to update",
     updating: "Updating...",
     add: "Add Subscription",
     empty: "No subscriptions yet",

@@ -95,7 +95,7 @@ fn store() -> &'static Mutex<StatsData> {
 
 fn persist(data: &StatsData) {
     if let Ok(json) = serde_json::to_string(data) {
-        let _ = std::fs::write(stats_path(), json);
+        let _ = crate::config::write_atomic(&stats_path(), json.as_bytes());
     }
 }
 

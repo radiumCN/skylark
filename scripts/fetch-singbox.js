@@ -15,6 +15,7 @@
 
 import { mkdirSync, existsSync, rmSync, renameSync, writeFileSync } from "fs";
 import { execFileSync } from "child_process";
+import { createHash } from "crypto";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { tmpdir } from "os";
@@ -58,13 +59,46 @@ async function main() {
   }
 
   const dirName = `sing-box-${version}-${p.os}-${p.arch}`;
-  const url = `https://github.com/SagerNet/sing-box/releases/download/v${version}/${dirName}.${p.ext}`;
-  console.log(`[fetch-singbox] downloading ${url}`);
+  const assetName = `${dirName}.${p.ext}`;
+  const url = `https://github.com/SagerNet/sing-box/releases/download/v${version}/${assetName}`;
 
+  // Resolve the asset's published SHA-256 from the release metadata so we can verify the
+  // kernel BEFORE bundling it. This kernel proxies all user traffic (and runs elevated under
+  // TUN), so an unverified download is a supply-chain risk.
+  const relRes = await fetch(
+    `https://api.github.com/repos/SagerNet/sing-box/releases/tags/v${version}`,
+    { headers: { "User-Agent": "skylark-build" } },
+  );
+  if (!relRes.ok) throw new Error(`GitHub API ${relRes.status} while resolving release v${version}`);
+  const release = await relRes.json();
+  const asset = (release.assets || []).find((a) => a.name === assetName);
+  const digest = asset && typeof asset.digest === "string" ? asset.digest : null; // "sha256:<hex>"
+  const expected = digest && digest.startsWith("sha256:") ? digest.slice(7).toLowerCase() : null;
+
+  console.log(`[fetch-singbox] downloading ${url}`);
   const res = await fetch(url, { headers: { "User-Agent": "skylark-build" } });
   if (!res.ok) throw new Error(`download failed: HTTP ${res.status} for ${url}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+
+  // Fail closed: refuse to bundle a kernel we can't verify. Old releases predating GitHub's
+  // per-asset digests can be allowed explicitly via ALLOW_UNVERIFIED_KERNEL=1.
+  if (expected) {
+    const actual = createHash("sha256").update(buf).digest("hex");
+    if (actual !== expected) {
+      throw new Error(`checksum mismatch for ${assetName}: expected ${expected}, got ${actual}`);
+    }
+    console.log(`[fetch-singbox] sha256 verified: ${expected.slice(0, 12)}…`);
+  } else if (process.env.ALLOW_UNVERIFIED_KERNEL) {
+    console.warn(`[fetch-singbox] WARNING: no published checksum for ${assetName}; proceeding unverified`);
+  } else {
+    throw new Error(
+      `no published SHA-256 for ${assetName}; refusing unverified kernel ` +
+        `(set ALLOW_UNVERIFIED_KERNEL=1 to override)`,
+    );
+  }
+
   const archive = join(tmpdir(), `singbox.${p.ext}`);
-  writeFileSync(archive, Buffer.from(await res.arrayBuffer()));
+  writeFileSync(archive, buf);
 
   // The host `tar` is bsdtar (Windows 10+, macOS) or GNU tar (Linux); both extract the
   // archive format we use on that very host (zip on Windows, tar.gz elsewhere).

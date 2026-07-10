@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, computed } from "vue";
+import { ref, watch, onMounted, onUnmounted, computed, nextTick } from "vue";
 import {
   Shield, Globe, Cpu, Monitor, Download,
   RefreshCw, CheckCircle, AlertCircle, Package, ExternalLink,
@@ -23,6 +23,17 @@ import Select from "../components/Select.vue";
 const store = useAppStore();
 const fb = useFeedbackStore();
 const { t } = useI18n();
+
+// Any link surviving sanitization in a (remote, untrusted) release note must never navigate
+// the app's own webview in place — that would replace the UI with attacker-controlled content
+// in the privileged Tauri context. Force every anchor to open externally and drop the
+// opener's access to `window`. Registered once at module load (idempotent across renders).
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.tagName === "A" && node.hasAttribute("href")) {
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noopener noreferrer");
+  }
+});
 
 // Render release notes (GitHub release bodies) as Markdown. The source is remote, so the
 // generated HTML is always run through DOMPurify before it reaches v-html — never trust the
@@ -175,12 +186,29 @@ const isMacOS = /mac/i.test(navigator.userAgent);
 const kernelBinaryName = isWindows ? "sing-box.exe" : "sing-box";
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+// Set while we revert localConfig from store.config after a save error. The deep watcher
+// fires on any reassignment (new object identity), so without this guard the revert would
+// re-arm scheduleSave and, for a persistently-failing save, spin an infinite save/toast loop.
+let reverting = false;
 
 function scheduleSave() {
+  if (reverting) return;
   if (saveTimer) clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
-    await store.saveConfig({ ...localConfig.value });
-    triggerSaved();
+    try {
+      await store.saveConfig({ ...localConfig.value });
+      triggerSaved();
+    } catch (e) {
+      // The backend rejected the config (e.g. an out-of-range/duplicate port). Surface it
+      // instead of silently swallowing — and re-sync the form from the persisted truth so
+      // the UI can't keep displaying a value that was never saved. Guard the watcher so this
+      // revert doesn't re-trigger a save.
+      fb.toastError(String(e));
+      reverting = true;
+      localConfig.value = { ...store.config };
+      await nextTick();
+      reverting = false;
+    }
   }, 600);
 }
 
@@ -535,6 +563,12 @@ onMounted(async () => {
     is_prerelease: boolean;
     current_version: string;
   }>("app-update-available", (event) => {
+    // The background checker runs on the backend's default channel, which may differ from the
+    // channel the user is currently viewing. Only let its result update this pane when the
+    // release's prerelease-ness matches the selected channel, so a stale stable-channel event
+    // can't overwrite the beta release the user explicitly checked (or vice-versa).
+    const wantPrerelease = (localConfig.value.update_channel ?? "stable") === "beta";
+    if (event.payload.is_prerelease !== wantPrerelease) return;
     appLatestRelease.value = {
       version: event.payload.version,
       published_at: event.payload.published_at,

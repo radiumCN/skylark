@@ -88,6 +88,8 @@ pub fn run() {
         }
     }
 
+    let sub_order: Vec<String> = subscriptions.iter().map(|s| s.id.clone()).collect();
+
     // If nodes are empty but subscriptions exist with cached content, re-parse
     if nodes.is_empty() && !subscriptions.is_empty() {
         let mut reparsed_nodes: Vec<types::ProxyNode> = Vec::new();
@@ -101,11 +103,45 @@ pub fn run() {
             }
         }
         if !reparsed_nodes.is_empty() {
+            subscription::dedupe_tags_globally(
+                &mut reparsed_nodes, &mut reparsed_outbounds, &sub_order,
+            );
             let _ = config::save_nodes(&reparsed_nodes);
             let _ = config::save_outbounds(&reparsed_outbounds);
             nodes = reparsed_nodes;
             outbounds = reparsed_outbounds;
         }
+    }
+
+    // Migrate persisted data written before outbounds carried a `subscription_id` key.
+    // Backfill each legacy outbound's owner from the node that shares its tag (node.name
+    // == outbound tag has always held), drop outbounds whose node is gone (orphans that
+    // used to linger, still selectable / health-probed), then de-duplicate tags globally
+    // so any pre-existing cross-subscription collision heals. A no-op once every outbound
+    // already carries the key.
+    if outbounds.iter().any(|ob| ob.get("subscription_id").is_none()) {
+        use std::collections::HashMap;
+        let owner: HashMap<&str, Option<String>> = nodes
+            .iter()
+            .map(|n| (n.name.as_str(), n.subscription_id.clone()))
+            .collect();
+        for ob in outbounds.iter_mut() {
+            if ob.get("subscription_id").is_some() {
+                continue;
+            }
+            let sid = ob
+                .get("tag")
+                .and_then(|t| t.as_str())
+                .and_then(|t| owner.get(t))
+                .and_then(|s| s.clone());
+            if let (Some(sid), Some(map)) = (sid, ob.as_object_mut()) {
+                map.insert("subscription_id".into(), serde_json::Value::String(sid));
+            }
+        }
+        outbounds.retain(|ob| ob.get("subscription_id").is_some());
+        subscription::dedupe_tags_globally(&mut nodes, &mut outbounds, &sub_order);
+        let _ = config::save_nodes(&nodes);
+        let _ = config::save_outbounds(&outbounds);
     }
 
     let app_state = AppState {
@@ -158,7 +194,7 @@ pub fn run() {
                     .state::<AppState>()
                     .app_config
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(|e| e.into_inner())
                     .close_to_tray;
                 if close_to_tray {
                     api.prevent_close();
@@ -521,13 +557,16 @@ pub fn run() {
                                 let state = app_c.state::<AppState>();
                                 // Throttle: ignore the click if a switch is already running,
                                 // and revert the just-toggled checkmark to the real state.
-                                if state.switching.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                                    sync_tray_checks(&app_c, &sys_item, &tun_it);
-                                    return;
-                                }
+                                let guard = match crate::commands::SwitchGuard::acquire(&state.switching) {
+                                    Some(g) => g,
+                                    None => {
+                                        sync_tray_checks(&app_c, &sys_item, &tun_it);
+                                        return;
+                                    }
+                                };
                                 let mode = if enabled { "system" } else { "off" };
                                 let res = crate::commands::apply_connection_mode(&app_c, &state, mode).await;
-                                state.switching.store(false, std::sync::atomic::Ordering::SeqCst);
+                                drop(guard); // clear `switching` before the UI sync (and on panic during the await)
                                 sync_tray_checks(&app_c, &sys_item, &tun_it);
                                 emit_tray_mode_result(&app_c, res);
                             });
@@ -542,13 +581,16 @@ pub fn run() {
                                 let state = app_c.state::<AppState>();
                                 // Throttle: ignore the click if a switch is already running,
                                 // and revert the just-toggled checkmark to the real state.
-                                if state.switching.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                                    sync_tray_checks(&app_c, &sys_item, &tun_it);
-                                    return;
-                                }
+                                let guard = match crate::commands::SwitchGuard::acquire(&state.switching) {
+                                    Some(g) => g,
+                                    None => {
+                                        sync_tray_checks(&app_c, &sys_item, &tun_it);
+                                        return;
+                                    }
+                                };
                                 let mode = if enabled { "tun" } else { "off" };
                                 let res = crate::commands::apply_connection_mode(&app_c, &state, mode).await;
-                                state.switching.store(false, std::sync::atomic::Ordering::SeqCst);
+                                drop(guard); // clear `switching` before the UI sync (and on panic during the await)
                                 sync_tray_checks(&app_c, &sys_item, &tun_it);
                                 emit_tray_mode_result(&app_c, res);
                             });

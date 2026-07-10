@@ -108,7 +108,81 @@ pub fn parse_subscription(
         SubType::Unknown => Err(anyhow!("无法识别的订阅格式")),
     }?;
     let (nodes, outbounds) = strip_info_placeholder_nodes(nodes, outbounds);
-    Ok(sanitize_and_dedupe_tags(nodes, outbounds))
+    let (nodes, outbounds) = sanitize_and_dedupe_tags(nodes, outbounds);
+    // Stamp ownership onto every outbound so cross-subscription merges / deletes can key
+    // outbounds by `subscription_id` exactly like nodes are keyed — the two lists must be
+    // added and removed as a unit or they desync (a node pointing at another sub's server).
+    // This key is internal; `build_proxy_outbounds` strips it before handing the config to
+    // sing-box (which rejects unknown outbound fields).
+    let outbounds = outbounds
+        .into_iter()
+        .map(|mut ob| {
+            if let Some(map) = ob.as_object_mut() {
+                map.insert("subscription_id".into(), Value::String(sub_id.to_string()));
+            }
+            ob
+        })
+        .collect();
+    Ok((nodes, outbounds))
+}
+
+/// Cross-subscription tag de-duplication. WITHIN one subscription tags are already unique
+/// (see [`sanitize_and_dedupe_tags`]); this resolves collisions BETWEEN subscriptions so the
+/// generated config has globally-unique outbound tags and every node's `name` stays EQUAL to
+/// its outbound tag — the identity that selectors, proxy groups, delay tests, the Clash API
+/// and active-node selection all rely on. sing-box aborts on a config with duplicate outbound
+/// tags, so without this two subscriptions that ship a node of the same name break startup.
+///
+/// Pairs a node to its outbound by `(subscription_id, tag)` — unique across the merged set
+/// before this pass — so a rename updates BOTH halves together. Processes subscriptions in
+/// `sub_order` (stable display order) and nodes in their stored order within each, so the
+/// SAME collision resolves to the SAME renamed tag on every refresh (no suffix flapping).
+/// Entries whose `subscription_id` is absent from `sub_order` are processed last.
+pub fn dedupe_tags_globally(
+    nodes: &mut [ProxyNode],
+    outbounds: &mut [Value],
+    sub_order: &[String],
+) {
+    use std::collections::{HashMap, HashSet};
+
+    let ob_key = |ob: &Value| -> (String, String) {
+        let sid = ob.get("subscription_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let tag = ob.get("tag").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        (sid, tag)
+    };
+    // (subscription_id, original tag) → outbound index. Unique before any rename.
+    let mut ob_index: HashMap<(String, String), usize> = HashMap::with_capacity(outbounds.len());
+    for (i, ob) in outbounds.iter().enumerate() {
+        ob_index.insert(ob_key(ob), i);
+    }
+
+    let rank = |sid: &str| sub_order.iter().position(|s| s == sid).unwrap_or(usize::MAX);
+    // Stable processing order: by subscription rank, then original node index.
+    let mut order: Vec<usize> = (0..nodes.len()).collect();
+    order.sort_by_key(|&i| (rank(nodes[i].subscription_id.as_deref().unwrap_or("")), i));
+
+    let mut used: HashSet<String> =
+        ["proxy", "direct", "block", "auto"].iter().map(|s| s.to_string()).collect();
+
+    for i in order {
+        let sid = nodes[i].subscription_id.as_deref().unwrap_or("").to_string();
+        let base = nodes[i].name.clone();
+        let mut tag = base.clone();
+        let mut n = 2u32;
+        while used.contains(&tag) {
+            tag = format!("{} {}", base, n);
+            n += 1;
+        }
+        used.insert(tag.clone());
+        if tag != base {
+            if let Some(&oi) = ob_index.get(&(sid, base)) {
+                if let Some(map) = outbounds[oi].as_object_mut() {
+                    map.insert("tag".into(), Value::String(tag.clone()));
+                }
+            }
+            nodes[i].name = tag;
+        }
+    }
 }
 
 /// Sanitize + de-duplicate outbound tags derived from (untrusted) airport data. sing-box
@@ -143,6 +217,16 @@ fn sanitize_and_dedupe_tags(
         }
         if matches!(ob.get("server_port").and_then(|p| p.as_u64()), Some(0)) {
             continue;
+        }
+        // Drop nodes whose `uuid` (vmess / vless / tuic) is present but not a valid UUID.
+        // sing-box rejects such an outbound, and since the generated config is validated as a
+        // single unit (`sing-box check`), ONE malformed node would otherwise abort the ENTIRE
+        // config — the whole proxy fails to start, not just that node. Only enforced when a
+        // string `uuid` is present, so types without a uuid (ss/trojan/hysteria2/…) are kept.
+        if let Some(uuid) = ob.get("uuid").and_then(|u| u.as_str()) {
+            if uuid::Uuid::parse_str(uuid).is_err() {
+                continue;
+            }
         }
 
         let base = ob.get("tag").and_then(|t| t.as_str()).unwrap_or("").trim().to_string();
@@ -1110,12 +1194,11 @@ fn parse_hysteria2(link: &str, sub_id: &str) -> Result<(ProxyNode, Value)> {
         .collect();
     let sni = params.get("sni").cloned().unwrap_or_else(|| server.clone());
     // sing-box has no per-connection certificate-pin equivalent for Hysteria2's
-    // `pinSHA256`; such nodes commonly use a fake SNI whose CA chain will not
-    // validate, so fall back to skipping verification to keep them connectable.
-    let has_pin = params.contains_key("pinSHA256")
-        || params.contains_key("pinsha256")
-        || params.contains_key("pin_sha256");
-    let insecure = param_insecure(&params) || has_pin;
+    // `pinSHA256`, and the pin is NOT enforced here. Do NOT let the mere presence of a pin
+    // param silently disable TLS verification: that would let a hostile subscription flip
+    // `insecure` on (a downgrade an on-path attacker could exploit) without the user ever
+    // opting in. Only honor an explicit `insecure` / `allowInsecure` from the node itself.
+    let insecure = param_insecure(&params);
 
     let mut tls = json!({ "enabled": true, "server_name": sni, "insecure": insecure });
     if let Some(alpn) = params.get("alpn") {
@@ -1597,10 +1680,13 @@ fn build_proxy_outbounds(
             .and_then(|t| t.as_str())
             .map(|t| t == "tcp")
             .unwrap_or(false);
-        if is_tcp_transport {
-            if let Some(map) = ob.as_object_mut() {
+        if let Some(map) = ob.as_object_mut() {
+            if is_tcp_transport {
                 map.remove("transport");
             }
+            // Internal ownership key (see `parse_subscription`); sing-box rejects unknown
+            // outbound fields, so it must never reach the generated config.
+            map.remove("subscription_id");
         }
         ob
     }).collect();
@@ -2258,6 +2344,80 @@ mod tests {
         assert_eq!(tags[3], "节点");
     }
 
+    /// Build a (node, outbound) pair carrying a `subscription_id`, mirroring what
+    /// `parse_subscription` stamps. `server` distinguishes same-named nodes across subs.
+    fn mk_owned(name: &str, server: &str, sid: &str) -> (ProxyNode, Value) {
+        let (mut node, mut ob) = mk_node_ob(name, server);
+        node.subscription_id = Some(sid.into());
+        ob.as_object_mut().unwrap().insert("subscription_id".into(), json!(sid));
+        (node, ob)
+    }
+
+    #[test]
+    fn dedupe_tags_globally_resolves_cross_subscription_collision() {
+        // Two subscriptions each ship a node literally named "香港01" pointing at DIFFERENT
+        // servers. Before the global pass they'd collide (one outbound wins by tag, one node
+        // silently dials the other sub's server). After it, tags are globally unique and each
+        // renamed node still points at its OWN server.
+        let (na, oa) = mk_owned("香港01", "a.example.com", "a");
+        let (nb, ob) = mk_owned("香港01", "b.example.com", "b");
+        let mut nodes = vec![na, nb];
+        let mut obs = vec![oa, ob];
+
+        dedupe_tags_globally(&mut nodes, &mut obs, &["a".into(), "b".into()]);
+
+        // Stable order: the first subscription keeps the base name, the second is suffixed.
+        assert_eq!(nodes[0].name, "香港01");
+        assert_eq!(nodes[1].name, "香港01 2");
+        // node.name stays equal to its outbound tag, index-for-index.
+        assert_eq!(obs[0]["tag"], "香港01");
+        assert_eq!(obs[1]["tag"], "香港01 2");
+        // Pairing preserved: the renamed outbound is STILL sub b's server, not sub a's.
+        assert_eq!(obs[1]["server"], "b.example.com");
+        assert_eq!(obs[1]["subscription_id"], "b");
+        // Tags are globally unique.
+        let tags: std::collections::HashSet<&str> =
+            obs.iter().map(|o| o["tag"].as_str().unwrap()).collect();
+        assert_eq!(tags.len(), 2);
+    }
+
+    #[test]
+    fn dedupe_tags_globally_is_deterministic_regardless_of_which_sub_updates() {
+        // Whichever subscription's entries are rebuilt, the SAME collision must resolve to the
+        // same renamed tag (driven by sub_order, not list position) — no suffix flapping.
+        let order = vec!["a".to_string(), "b".to_string()];
+        let build = || {
+            let (na, oa) = mk_owned("HK", "a", "a");
+            let (nb, ob) = mk_owned("HK", "b", "b");
+            (vec![na, nb], vec![oa, ob])
+        };
+        let (mut n1, mut o1) = build();
+        dedupe_tags_globally(&mut n1, &mut o1, &order);
+        // Same inputs but outbounds/nodes appended in the opposite order (as if sub b was the
+        // one just re-merged and pushed last) still yields a's base name for a, suffix for b.
+        let (mut n2, mut o2) = {
+            let (na, oa) = mk_owned("HK", "a", "a");
+            let (nb, ob) = mk_owned("HK", "b", "b");
+            (vec![nb, na], vec![ob, oa])
+        };
+        dedupe_tags_globally(&mut n2, &mut o2, &order);
+        let tag_of = |nodes: &[ProxyNode], sid: &str| {
+            nodes.iter().find(|n| n.subscription_id.as_deref() == Some(sid)).unwrap().name.clone()
+        };
+        assert_eq!(tag_of(&n1, "a"), "HK");
+        assert_eq!(tag_of(&n1, "b"), "HK 2");
+        assert_eq!(tag_of(&n2, "a"), "HK");
+        assert_eq!(tag_of(&n2, "b"), "HK 2");
+    }
+
+    #[test]
+    fn parse_subscription_stamps_subscription_id_on_outbounds() {
+        let content = "vless://33333333-3333-3333-3333-333333333333@h.net:443#N1";
+        let (_nodes, obs) = parse_subscription(content, "sub-x").unwrap();
+        assert!(!obs.is_empty());
+        assert_eq!(obs[0]["subscription_id"], "sub-x");
+    }
+
     #[test]
     fn detect_sub_type_recognises_known_formats() {
         assert_eq!(detect_sub_type("proxies:\n  - name: a", ""), SubType::Clash);
@@ -2445,9 +2605,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_hysteria2_pin_sha256_forces_insecure() {
-        // pinSHA256 has no sing-box equivalent → skip cert verification to stay connectable.
+    fn parse_hysteria2_pin_sha256_does_not_disable_verification() {
+        // A `pinSHA256` param must NOT silently turn off TLS verification: only an explicit
+        // `insecure`/`allowInsecure` may. This prevents a hostile subscription from forcing
+        // an insecure downgrade the user never opted into.
         let link = "hysteria2://pw@hy.example.com:443?sni=fake.apple.com&pinSHA256=AA:BB#HY";
+        let (_node, ob) = parse_hysteria2(link, "s").unwrap();
+        assert_eq!(ob["tls"]["insecure"], false);
+    }
+
+    #[test]
+    fn parse_hysteria2_explicit_insecure_still_honored() {
+        let link = "hysteria2://pw@hy.example.com:443?insecure=1#HY";
         let (_node, ob) = parse_hysteria2(link, "s").unwrap();
         assert_eq!(ob["tls"]["insecure"], true);
     }
@@ -2510,7 +2679,8 @@ mod tests {
             "server_port": 443,
             "uuid": "11111111-1111-1111-1111-111111111111",
             "alter_id": 0,
-            "security": "auto"
+            "security": "auto",
+            "subscription_id": "sub-a"
         });
         let cfg = crate::types::AppConfig::default();
         let result = build_singbox_config(&[outbound], &cfg, None, &[], true);
@@ -2523,9 +2693,12 @@ mod tests {
         let outbounds = result["outbounds"].as_array().expect("outbounds array");
 
         // The parsed node is passed through verbatim.
+        let node_ob = outbounds.iter().find(|o| o["tag"] == "NodeA")
+            .expect("node outbound not propagated");
+        // The internal ownership key must be stripped — sing-box rejects unknown fields.
         assert!(
-            outbounds.iter().any(|o| o["tag"] == "NodeA"),
-            "node outbound not propagated"
+            node_ob.get("subscription_id").is_none(),
+            "internal subscription_id key leaked into the generated config"
         );
         // The primary selector and the built-in direct outbound always exist.
         assert!(

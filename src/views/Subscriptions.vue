@@ -710,8 +710,7 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 500px;
 }
 .sub-actions { display: flex; gap: 4px; flex-shrink: 0; }
-.icon-btn { padding: 6px !important; transition: color 0.15s ease-out, background 0.15s ease-out; }
-.icon-btn.danger:hover { color: var(--color-error); background: var(--color-error-soft); }
+.icon-btn.filter-active { color: var(--color-primary); }
 
 /* Airport usage / quota */
 .sub-quota {
@@ -840,7 +839,6 @@ async function changeInterval(id: string, autoUpdate: boolean, interval: number)
 .filter-summary:hover { color: var(--color-text); }
 .filter-check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--color-text-secondary); cursor: pointer; margin-top: 4px; }
 .filter-check input { width: 14px; height: 14px; }
-.icon-btn.filter-active { color: var(--color-primary); }
 .filter-dialog { width: 420px; max-width: 92vw; }
 .filter-body { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .filter-note { font-size: var(--fs-sm); color: var(--color-text-secondary); line-height: 1.5; }

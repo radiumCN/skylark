@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { useRouter } from "vue-router";
 import { Line } from "vue-chartjs";
 import {
   Chart as ChartJS,
@@ -13,7 +14,7 @@ import {
   LinearScale,
   type TooltipItem,
 } from "chart.js";
-import { ArrowUp, ArrowDown, Database, RefreshCw } from "@lucide/vue";
+import { ArrowUp, ArrowDown, Database, RefreshCw, Home } from "@lucide/vue";
 import { useAppStore, type TrafficDay } from "../stores/app";
 import { useI18n } from "vue-i18n";
 import { formatBytes } from "../utils/format";
@@ -23,6 +24,7 @@ import EmptyState from "../components/EmptyState.vue";
 import Skeleton from "../components/Skeleton.vue";
 
 const { t } = useI18n();
+const router = useRouter();
 
 ChartJS.register(Title, Tooltip, Legend, LineElement, PointElement, Filler, CategoryScale, LinearScale);
 
@@ -31,6 +33,18 @@ const history = ref<TrafficDay[]>([]);
 const loading = ref(false);
 const rangeDays = ref(30);
 const { refreshing, refresh } = useDelayedRefresh();
+/** Bumped on theme flips so Chart.js colors re-read CSS variables. */
+const themeTick = ref(0);
+
+function cssVar(name: string, fallback: string): string {
+  void themeTick.value;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
+function bumpTheme() {
+  themeTick.value += 1;
+}
 
 // Short MM-DD label for the x-axis.
 function shortDate(date: string): string {
@@ -64,8 +78,8 @@ const chartData = computed(() => ({
     {
       label: t("stats.download"),
       data: shown.value.map((d) => d.download),
-      borderColor: "#0e8f5a",
-      backgroundColor: "rgba(14, 143, 90, 0.10)",
+      borderColor: cssVar("--color-success", "#0e8f5a"),
+      backgroundColor: cssVar("--color-success-soft", "rgba(14, 143, 90, 0.14)"),
       borderWidth: 2,
       tension: 0.35,
       fill: true,
@@ -75,8 +89,8 @@ const chartData = computed(() => ({
     {
       label: t("stats.upload"),
       data: shown.value.map((d) => d.upload),
-      borderColor: "#5e6ad2",
-      backgroundColor: "rgba(94, 106, 210, 0.10)",
+      borderColor: cssVar("--color-primary", "#5e6ad2"),
+      backgroundColor: cssVar("--color-primary-soft", "rgba(94, 106, 210, 0.14)"),
       borderWidth: 2,
       tension: 0.35,
       fill: true,
@@ -86,35 +100,39 @@ const chartData = computed(() => ({
   ],
 }));
 
-const chartOptions = computed(() => ({
-  responsive: true,
-  maintainAspectRatio: false,
-  interaction: { mode: "index" as const, intersect: false },
-  plugins: {
-    legend: { position: "top" as const, labels: { color: "rgba(128,128,128,0.85)", boxWidth: 12, font: { size: 11 } } },
-    tooltip: {
-      callbacks: {
-        label: (ctx: TooltipItem<"line">) =>
-          `${ctx.dataset.label}: ${formatBytes(Number(ctx.parsed.y ?? 0))}`,
+const chartOptions = computed(() => {
+  const muted = cssVar("--color-text-muted", "#7d8298");
+  const border = cssVar("--color-border", "rgba(128,128,128,0.10)");
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: "index" as const, intersect: false },
+    plugins: {
+      legend: { position: "top" as const, labels: { color: muted, boxWidth: 12, font: { size: 11 } } },
+      tooltip: {
+        callbacks: {
+          label: (ctx: TooltipItem<"line">) =>
+            `${ctx.dataset.label}: ${formatBytes(Number(ctx.parsed.y ?? 0))}`,
+        },
       },
     },
-  },
-  scales: {
-    x: {
-      grid: { display: false },
-      ticks: { color: "rgba(128,128,128,0.65)", font: { size: 10 }, maxRotation: 0, autoSkip: true },
-    },
-    y: {
-      beginAtZero: true,
-      grid: { color: "rgba(128,128,128,0.10)" },
-      ticks: {
-        color: "rgba(128,128,128,0.65)",
-        font: { size: 10 },
-        callback: (v: number | string) => formatBytes(Number(v)),
+    scales: {
+      x: {
+        grid: { display: false },
+        ticks: { color: muted, font: { size: 10 }, maxRotation: 0, autoSkip: true },
+      },
+      y: {
+        beginAtZero: true,
+        grid: { color: border },
+        ticks: {
+          color: muted,
+          font: { size: 10 },
+          callback: (v: number | string) => formatBytes(Number(v)),
+        },
       },
     },
-  },
-}));
+  };
+});
 
 async function load() {
   loading.value = true;
@@ -125,7 +143,16 @@ async function load() {
   }
 }
 
-onMounted(load);
+let mq: MediaQueryList | null = null;
+onMounted(() => {
+  load();
+  mq = window.matchMedia("(prefers-color-scheme: dark)");
+  mq.addEventListener("change", bumpTheme);
+});
+onUnmounted(() => {
+  mq?.removeEventListener("change", bumpTheme);
+});
+watch(() => store.config.theme, bumpTheme);
 </script>
 
 <template>
@@ -197,7 +224,12 @@ onMounted(load);
       <div v-else-if="shown.length > 0" class="chart-wrap">
         <Line :data="chartData" :options="chartOptions" />
       </div>
-      <EmptyState v-else :icon="Database" :title="t('stats.emptyHint')" />
+      <EmptyState v-else :icon="Database" :title="t('stats.emptyHint')">
+        <button class="btn btn-primary" @click="router.push('/home')">
+          <Home :size="14" />
+          {{ t('stats.emptyCta') }}
+        </button>
+      </EmptyState>
     </div>
   </div>
 </template>

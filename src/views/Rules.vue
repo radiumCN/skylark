@@ -10,6 +10,7 @@ import {
   Filter, Globe, Layers, BookMarked, Info, RotateCcw, GripVertical
 } from "@lucide/vue";
 import EmptyState from "../components/EmptyState.vue";
+import Skeleton from "../components/Skeleton.vue";
 import ToggleSwitch from "../components/ToggleSwitch.vue";
 import Select from "../components/Select.vue";
 import { useFeedbackStore } from "../stores/feedback";
@@ -66,9 +67,24 @@ const dirty = ref(false);
 // ─── Remote rule-set providers ───────────────────────────────────────
 const providers = ref<RuleProvider[]>([]);
 const showProviderDialog = ref(false);
+const providerDialogEl = ref<HTMLElement | null>(null);
 const newProviderName = ref("");
 const newProviderUrl = ref("");
 const newProviderAction = ref<RuleAction>("proxy");
+
+function resetProviderForm() {
+  newProviderName.value = "";
+  newProviderUrl.value = "";
+  newProviderAction.value = "proxy";
+}
+function closeProviderDialog() {
+  showProviderDialog.value = false;
+  resetProviderForm();
+}
+useModal(showProviderDialog, {
+  onClose: closeProviderDialog,
+  dialog: providerDialogEl,
+});
 
 // ─── Add dialog state ────────────────────────────────────────────────
 
@@ -342,10 +358,7 @@ async function addProvider() {
       url,
       action: newProviderAction.value,
     });
-    showProviderDialog.value = false;
-    newProviderName.value = "";
-    newProviderUrl.value = "";
-    newProviderAction.value = "proxy";
+    closeProviderDialog();
   } catch (e) {
     fb.toastError(String(e));
   }
@@ -441,7 +454,11 @@ onMounted(() => {
       <div v-else class="provider-list">
         <div v-for="p in providers" :key="p.id" class="provider-item" :class="{ disabled: !p.enabled }">
           <span class="toggle-cell" :title="p.enabled ? t('rules.clickDisable') : t('rules.clickEnable')">
-            <ToggleSwitch :model-value="p.enabled" @update:model-value="toggleProvider(p.id)" />
+            <ToggleSwitch
+              :model-value="p.enabled"
+              :aria-label="p.enabled ? t('rules.clickDisable') : t('rules.clickEnable')"
+              @update:model-value="toggleProvider(p.id)"
+            />
           </span>
           <div class="provider-info">
             <div class="provider-name">
@@ -459,42 +476,69 @@ onMounted(() => {
     </div>
 
     <!-- Add provider dialog -->
-    <div v-if="showProviderDialog" class="card add-dialog">
-      <div class="dialog-title">{{ t("rules.addRemoteRuleSet") }}</div>
-      <div class="form-group">
-        <label class="form-label">{{ t("rules.name") }}</label>
-        <input class="input" v-model="newProviderName" :placeholder="t('rules.namePlaceholder')" @keyup.enter="addProvider" />
+    <Transition name="modal-pop">
+      <div v-if="showProviderDialog" class="modal-overlay" @click.self="closeProviderDialog">
+        <div
+          ref="providerDialogEl"
+          class="dialog dialog--sm card-strong"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="t('rules.addRemoteRuleSet')"
+          tabindex="-1"
+        >
+          <div class="dialog-title">{{ t("rules.addRemoteRuleSet") }}</div>
+          <div class="form-group">
+            <label class="form-label">{{ t("rules.name") }}</label>
+            <input class="input" v-model="newProviderName" :placeholder="t('rules.namePlaceholder')" @keyup.enter="addProvider" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("rules.ruleSetUrl") }}</label>
+            <input class="input" v-model="newProviderUrl" :placeholder="t('rules.ruleSetUrlPlaceholder')" @keyup.enter="addProvider" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("rules.hitAction") }}</label>
+            <Select
+              v-model="newProviderAction"
+              :options="[
+                { value: 'proxy', label: t('rules.actionProxy') },
+                { value: 'direct', label: t('rules.actionDirect') },
+                { value: 'block', label: t('rules.actionBlock') },
+              ]"
+            />
+          </div>
+          <div class="dialog-actions">
+            <button class="btn btn-ghost" @click="closeProviderDialog">{{ t("rules.cancel") }}</button>
+            <button class="btn btn-primary" @click="addProvider">{{ t("rules.add") }}</button>
+          </div>
+        </div>
       </div>
-      <div class="form-group">
-        <label class="form-label">{{ t("rules.ruleSetUrl") }}</label>
-        <input class="input" v-model="newProviderUrl" :placeholder="t('rules.ruleSetUrlPlaceholder')" @keyup.enter="addProvider" />
-      </div>
-      <div class="form-group">
-        <label class="form-label">{{ t("rules.hitAction") }}</label>
-        <Select
-          v-model="newProviderAction"
-          :options="[
-            { value: 'proxy', label: t('rules.actionProxy') },
-            { value: 'direct', label: t('rules.actionDirect') },
-            { value: 'block', label: t('rules.actionBlock') },
-          ]"
-        />
-      </div>
-      <div class="dialog-actions">
-        <button class="btn btn-ghost" @click="showProviderDialog = false">{{ t("rules.cancel") }}</button>
-        <button class="btn btn-primary" @click="addProvider">{{ t("rules.add") }}</button>
-      </div>
-    </div>
+    </Transition>
 
     <!-- Rules List -->
+    <div v-if="loading && rules.length === 0" class="rules-skel-list">
+      <div v-for="i in 4" :key="i" class="card rule-skel">
+        <Skeleton width="22px" height="22px" radius="var(--radius-sm)" />
+        <Skeleton width="36px" height="22px" radius="100px" />
+        <div class="rule-skel-body">
+          <Skeleton width="40%" height="13px" />
+          <Skeleton width="62%" height="10px" />
+        </div>
+        <Skeleton width="48px" height="20px" radius="100px" />
+      </div>
+    </div>
     <EmptyState
-      v-if="rules.length === 0 && !loading"
+      v-else-if="rules.length === 0"
       :icon="Filter"
       :title="t('rules.emptyTitle')"
       :desc="t('rules.emptyDesc')"
-    />
+    >
+      <button class="btn btn-primary" @click="showAddDialog = true">
+        <Plus :size="14" />
+        {{ t("rules.addRule") }}
+      </button>
+    </EmptyState>
 
-    <div class="rules-list">
+    <div v-if="rules.length > 0" class="rules-list">
       <div
         v-for="(rule, index) in rules"
         :key="rule.id"
@@ -527,7 +571,11 @@ onMounted(() => {
             :title="rule.enabled ? t('rules.clickDisable') : t('rules.clickEnable')"
             @click.stop
           >
-            <ToggleSwitch :model-value="rule.enabled" @update:model-value="toggleRule(rule.id)" />
+            <ToggleSwitch
+              :model-value="rule.enabled"
+              :aria-label="rule.enabled ? t('rules.clickDisable') : t('rules.clickEnable')"
+              @update:model-value="toggleRule(rule.id)"
+            />
           </span>
           <div class="rule-info">
             <div class="rule-name">{{ rule.name }}</div>
@@ -713,8 +761,8 @@ onMounted(() => {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
+  background: var(--color-on-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-on-primary) 35%, transparent);
   flex-shrink: 0;
 }
 
@@ -781,14 +829,15 @@ onMounted(() => {
 .rule-name { font-size: 13px; font-weight: 600; }
 .rule-summary { font-size: 11px; color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
 .rule-controls { display: flex; gap: 2px; flex-shrink: 0; }
-.icon-btn {
-  width: 28px; height: 28px; border: none; background: transparent;
-  border-radius: var(--radius-sm); cursor: pointer;
-  display: flex; align-items: center; justify-content: center;
-  color: var(--color-text-muted); transition: all 0.15s ease-out;
+
+.rules-skel-list { display: flex; flex-direction: column; gap: 6px; }
+.rule-skel {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px;
 }
-.icon-btn:hover { background: var(--color-neutral); color: var(--color-text); }
-.icon-btn.danger:hover { background: var(--color-error-soft); color: var(--color-error); }
+.rule-skel-body {
+  flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0;
+}
 
 /* Expanded detail */
 .rule-detail {
@@ -814,6 +863,7 @@ onMounted(() => {
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg), var(--edge-highlight);
 }
+.dialog--sm { max-width: 440px; }
 .dialog-title { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; }
 .dialog-form { display: flex; flex-direction: column; gap: 10px; }
 .form-section-title {
@@ -839,7 +889,6 @@ onMounted(() => {
 
 /* ─── Remote rule-set providers ─── */
 .provider-head { display: flex; align-items: center; justify-content: space-between; }
-.btn-sm { padding: 3px 10px !important; font-size: 12px; }
 .provider-hint { font-size: 12px; color: var(--color-text-muted); margin: 6px 0 10px; line-height: 1.5; }
 .provider-empty { font-size: 12px; color: var(--color-text-muted); padding: 8px 0; }
 .provider-list { display: flex; flex-direction: column; gap: 8px; }
@@ -868,5 +917,4 @@ onMounted(() => {
   background: var(--color-neutral-strong); color: var(--color-text-secondary);
 }
 
-.add-dialog { padding: 20px; display: flex; flex-direction: column; gap: 14px; margin-bottom: 4px; }
 </style>

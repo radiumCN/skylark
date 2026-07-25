@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { CheckCircle, AlertCircle, Info, X } from "@lucide/vue";
 import type { Component } from "vue";
+import { useI18n } from "vue-i18n";
 import { useFeedbackStore } from "../stores/feedback";
 import type { ToastType } from "../stores/feedback";
 
+const { t } = useI18n();
 const fb = useFeedbackStore();
 const icons: Record<ToastType, Component> = {
   success: CheckCircle,
@@ -24,7 +26,7 @@ const icons: Record<ToastType, Component> = {
         >
           <component :is="icons[tst.type]" :size="16" class="toast-icon" />
           <span class="toast-msg">{{ tst.message }}</span>
-          <button class="toast-close" aria-label="Dismiss" @click="fb.removeToast(tst.id)">
+          <button class="toast-close" :aria-label="t('common.dismiss')" @click="fb.removeToast(tst.id)">
             <X :size="14" />
           </button>
         </div>

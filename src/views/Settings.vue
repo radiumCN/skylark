@@ -1171,7 +1171,7 @@ onUnmounted(() => {
             <Save :size="13" /> {{ t('settings.saveCurrentProfile') }}
           </button>
         </div>
-        <div v-if="profiles.length === 0" class="profile-empty">{{ t('settings.noProfiles') }}</div>
+        <div v-if="profiles.length === 0" class="profile-empty" role="status">{{ t('settings.noProfiles') }}</div>
         <div v-else class="profile-list">
           <div v-for="p in profiles" :key="p" class="profile-item">
             <span class="profile-name">{{ p }}</span>
@@ -1485,8 +1485,6 @@ onUnmounted(() => {
 .profile-item:hover { background: var(--color-neutral); border-color: var(--color-primary-soft); }
 .profile-name { font-size: 13px; font-weight: 500; }
 .profile-actions { display: flex; gap: 6px; }
-.btn-sm { padding: 3px 10px; font-size: 12px; }
-.btn-sm.danger { color: var(--color-error); }
 
 /* Sticky section-jump nav pinned to the app-content scroll region so sections
    scroll underneath it. Full-bleed over the shell's 24px side padding so it reads
@@ -1524,7 +1522,7 @@ onUnmounted(() => {
 .section-chip:hover { background: var(--color-neutral-soft); color: var(--color-text); }
 .section-chip.active {
   background: var(--color-primary);
-  color: #fff;
+  color: var(--color-on-primary);
   border-color: transparent;
   box-shadow: 0 2px 8px var(--color-primary-glow);
 }
@@ -1658,7 +1656,7 @@ onUnmounted(() => {
   display: inline-flex; align-items: center; gap: 4px;
   font-size: 11px; font-weight: 500; padding: 2px 8px;
   border-radius: 100px;
-  background: rgba(124, 92, 236, 0.12); color: var(--accent-violet);
+  background: var(--accent-violet-soft); color: var(--accent-violet);
 }
 
 .channel-select-wrap {
@@ -1685,7 +1683,7 @@ onUnmounted(() => {
 .check-desc { font-size: 11px; }
 .text-ok { color: var(--color-success); }
 .text-bad { color: var(--color-error); }
-.btn-sm { padding: 4px 10px !important; font-size: 12px !important; flex-shrink: 0; }
+.tun-checklist .btn-sm { flex-shrink: 0; }
 .tun-error {
   font-size: 11px; color: var(--color-error);
   padding: 6px 8px; background: var(--color-error-soft);

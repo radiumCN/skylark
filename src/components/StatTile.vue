@@ -59,9 +59,9 @@ withDefaults(
 }
 .accent-primary { background: var(--color-primary-soft); color: var(--color-primary); }
 .accent-success { background: var(--color-success-soft); color: var(--color-success); }
-.accent-violet { background: rgba(124, 92, 236, 0.14); color: var(--accent-violet); }
-.accent-teal { background: rgba(14, 163, 148, 0.14); color: var(--accent-teal); }
-.accent-amber { background: rgba(193, 128, 30, 0.14); color: var(--accent-amber); }
+.accent-violet { background: var(--accent-violet-soft); color: var(--accent-violet); }
+.accent-teal { background: var(--accent-teal-soft); color: var(--accent-teal); }
+.accent-amber { background: var(--accent-amber-soft); color: var(--accent-amber); }
 
 .stat-tile-body { flex: 1; min-width: 0; }
 .stat-tile-label {

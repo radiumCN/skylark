@@ -52,16 +52,22 @@ watch(
         class="modal-overlay"
         @click.self="fb.resolveConfirm(false)"
       >
-        <div class="confirm-dialog card-strong" role="alertdialog" aria-modal="true">
+        <div
+          class="confirm-dialog card-strong"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="confirm-title"
+          aria-describedby="confirm-message"
+        >
           <div class="confirm-head">
             <div class="confirm-icon" :class="{ danger: fb.confirmOptions.danger }">
               <AlertTriangle :size="18" />
             </div>
-            <h2 class="confirm-title">
+            <h2 id="confirm-title" class="confirm-title">
               {{ fb.confirmOptions.title ?? t('common.confirmTitle') }}
             </h2>
           </div>
-          <p class="confirm-message">{{ fb.confirmOptions.message }}</p>
+          <p id="confirm-message" class="confirm-message">{{ fb.confirmOptions.message }}</p>
           <div class="confirm-actions">
             <button ref="cancelBtn" class="btn btn-ghost" @click="fb.resolveConfirm(false)">
               {{ fb.confirmOptions.cancelText ?? t('common.cancel') }}

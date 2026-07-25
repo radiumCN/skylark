@@ -24,12 +24,12 @@ defineProps<{
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 48px 24px;
+  gap: var(--space-3);
+  padding: var(--space-8) var(--space-6);
   color: var(--color-text-muted);
   text-align: center;
 }
 .empty-icon { opacity: 0.35; }
-.empty-title { font-size: 15px; font-weight: 600; color: var(--color-text-secondary); }
-.empty-desc { font-size: 13px; }
+.empty-title { font-size: var(--fs-lg); font-weight: 600; color: var(--color-text-secondary); }
+.empty-desc { font-size: var(--fs-md); }
 </style>

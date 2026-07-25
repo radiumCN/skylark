@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from "vue";
-import { Gauge, RefreshCw, CheckCircle, Signal, Zap, ArrowUpDown, Plus, Trash2, Pencil, Layers, ChevronDown, Columns3 } from "@lucide/vue";
+import { useRouter } from "vue-router";
+import { Gauge, RefreshCw, CheckCircle, Signal, Zap, ArrowUpDown, Plus, Trash2, Pencil, Layers, ChevronDown, Columns3, Rss } from "@lucide/vue";
 import { useAppStore } from "../stores/app";
 import { useFeedbackStore } from "../stores/feedback";
 import { useI18n } from "vue-i18n";
@@ -10,6 +11,7 @@ import Skeleton from "../components/Skeleton.vue";
 import Select from "../components/Select.vue";
 
 const { t } = useI18n();
+const router = useRouter();
 
 const groupTypeOptions = computed(() => [
   { value: "urltest", label: t("nodes.autoSelectByLatency") },
@@ -358,7 +360,11 @@ const autoNowName = computed(() => store.activeNodeNow);
       </div>
 
       <div v-if="(groupsOpen || showGroupEditor) && store.proxyGroups.length === 0 && !showGroupEditor" class="group-empty">
-        {{ t("nodes.groupEmptyHint") }}
+        <span>{{ t("nodes.groupEmptyHint") }}</span>
+        <button class="btn btn-ghost btn-sm" @click="openNewGroup">
+          <Plus :size="13" />
+          {{ t("nodes.newGroup") }}
+        </button>
       </div>
 
       <div v-if="(groupsOpen || showGroupEditor) && store.proxyGroups.length > 0" class="group-list">
@@ -426,7 +432,8 @@ const autoNowName = computed(() => store.activeNodeNow);
 
     <!-- Speed-test notice when proxy is not running -->
     <div v-if="store.nodes.length > 0 && !store.status.running" class="speed-notice">
-      <span>⚡ {{ t("nodes.speedNoticePrefix") }}<strong>{{ t("nodes.speedNoticeStrong") }}</strong></span>
+      <Zap :size="14" class="speed-notice-icon" aria-hidden="true" />
+      <span>{{ t("nodes.speedNoticePrefix") }}<strong>{{ t("nodes.speedNoticeStrong") }}</strong></span>
     </div>
 
     <!-- Cold-start skeleton (before the first data load resolves) -->
@@ -447,7 +454,12 @@ const autoNowName = computed(() => store.activeNodeNow);
       :icon="Signal"
       :title="t('nodes.emptyTitle')"
       :desc="t('nodes.emptyDesc')"
-    />
+    >
+      <button class="btn btn-primary" @click="router.push('/subscriptions')">
+        <Rss :size="14" />
+        {{ t("nodes.emptyCta") }}
+      </button>
+    </EmptyState>
 
     <!-- Node List -->
     <div class="node-list" :style="{ '--node-cols': columns }">
@@ -548,6 +560,7 @@ const autoNowName = computed(() => store.activeNodeNow);
             :disabled="isTesting(node.id)"
             @click.stop="testOne(node.id)"
             :title="store.status.running ? t('nodes.testNodeTip') : t('nodes.testNodeTipNoProxy')"
+            :aria-label="store.status.running ? t('nodes.testNodeTip') : t('nodes.testNodeTipNoProxy')"
           >
             <Gauge :size="13" :class="{ spin: isTesting(node.id) }" />
           </button>
@@ -664,7 +677,6 @@ const autoNowName = computed(() => store.activeNodeNow);
   background: var(--color-neutral-soft);
 }
 .download-speed { font-size: var(--fs-xs); font-weight: 500; }
-.icon-btn { padding: 5px !important; }
 
 .no-result { text-align: center; color: var(--color-text-muted); font-size: 13px; padding: 24px; }
 
@@ -674,6 +686,7 @@ const autoNowName = computed(() => store.activeNodeNow);
   background: var(--color-warning-soft); border: 1px solid var(--color-warning-soft);
   color: var(--color-attention);
 }
+.speed-notice-icon { flex-shrink: 0; }
 .speed-notice strong { color: var(--color-text); }
 
 /* ─── Custom proxy groups ─── */
@@ -698,8 +711,10 @@ const autoNowName = computed(() => store.activeNodeNow);
   transition: transform 0.18s ease-out;
 }
 .group-chevron.open { transform: rotate(180deg); }
-.btn-sm { padding: 3px 10px !important; font-size: 12px; }
-.group-empty { font-size: 12px; color: var(--color-text-muted); }
+.group-empty {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  font-size: 12px; color: var(--color-text-muted);
+}
 .group-list { display: flex; flex-direction: column; gap: 8px; }
 .group-item {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
@@ -723,15 +738,6 @@ const autoNowName = computed(() => store.activeNodeNow);
 }
 .group-members { font-size: 11px; color: var(--color-text-muted); margin-top: 2px; }
 .group-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
-
-.icon-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; border: none; border-radius: var(--radius-sm);
-  background: transparent; color: var(--color-text-secondary); cursor: pointer;
-  transition: background 0.15s ease-out, color 0.15s ease-out;
-}
-.icon-btn:hover { background: var(--color-neutral); color: var(--color-text); }
-.icon-btn.danger:hover { background: var(--color-error-soft); color: var(--color-error); }
 
 .group-editor {
   display: flex; flex-direction: column; gap: 10px;

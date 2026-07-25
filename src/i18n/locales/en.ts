@@ -26,6 +26,7 @@ export default {
     confirmTitle: "Confirm Action",
     delete: "Delete",
     loading: "Loading...",
+    dismiss: "Dismiss",
   },
   tray: {
     connected: "Connected",
@@ -186,6 +187,7 @@ export default {
     speedNoticeStrong: "Download speed test requires starting the proxy first",
     emptyTitle: "No nodes",
     emptyDesc: "Please add a subscription on the \"Subscriptions\" page first",
+    emptyCta: "Add a subscription",
     autoCardTip: "Dynamic auto-select: the core continuously tests speed and automatically switches to the lowest-latency node (Clash.Meta \"Auto\")",
     autoAllNodes: "Auto-select (all nodes)",
     autoThisSub: "Auto-select (this subscription)",
@@ -207,6 +209,7 @@ export default {
     searchPlaceholder: "Search host, destination, rule...",
     emptyTitle: "No active connections",
     emptyDesc: "Live connection info will appear here once the proxy is running",
+    emptyCta: "Go to Dashboard",
     colHost: "Host",
     colPort: "Port",
     colRule: "Rule",
@@ -330,6 +333,7 @@ export default {
     totalRange: "Total (last {n} days)",
     dailyTraffic: "Daily Traffic",
     emptyHint: "No traffic records yet. Once the proxy is enabled and generates traffic, daily stats will accumulate automatically (data is persisted about every 30 seconds).",
+    emptyCta: "Go to Dashboard",
   },
   settings: {
     language: "Language",

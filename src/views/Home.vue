@@ -327,7 +327,7 @@ onUnmounted(() => {
 .hero-icon.off { background: var(--color-neutral); color: var(--color-text-muted); }
 .hero-icon.on {
   background: var(--color-success);
-  color: white;
+  color: var(--color-on-primary);
   box-shadow: 0 4px 14px var(--color-success-glow);
   animation: hero-pop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -379,8 +379,8 @@ onUnmounted(() => {
 
 /* Icon tints used by the control-center rows */
 .icon-blue { background: var(--color-primary-soft); color: var(--color-primary); }
-.icon-violet { background: rgba(124, 92, 236, 0.13); color: var(--accent-violet); }
-.icon-teal { background: rgba(14, 155, 142, 0.14); color: var(--accent-teal); }
+.icon-violet { background: var(--accent-violet-soft); color: var(--accent-violet); }
+.icon-teal { background: var(--accent-teal-soft); color: var(--accent-teal); }
 
 /* Connection control rows (inside the Control Center panel) */
 .net-row {

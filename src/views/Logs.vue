@@ -130,8 +130,14 @@ onUnmounted(() => {
             {{ level === 'all' ? t('logs.all') : level.toUpperCase() }}
           </button>
         </div>
-        <button class="btn btn-ghost" :title="t('logs.autoScroll')" @click="autoScroll = !autoScroll">
-          <ArrowDown :size="14" :style="{ opacity: autoScroll ? 1 : 0.4 }" />
+        <button
+          class="btn btn-ghost"
+          :class="{ 'is-off': !autoScroll }"
+          :title="t('logs.autoScroll')"
+          :aria-pressed="autoScroll"
+          @click="autoScroll = !autoScroll"
+        >
+          <ArrowDown :size="14" class="auto-scroll-icon" />
           {{ t('logs.autoScroll') }}
         </button>
         <button class="btn btn-ghost" @click="copyAllLogs" :title="copySuccess ? t('logs.copied') + '!' : t('logs.copyAll')">
@@ -175,6 +181,7 @@ onUnmounted(() => {
   background: var(--color-error-soft);
   color: var(--color-error);
 }
+.btn.is-off .auto-scroll-icon { opacity: 0.4; }
 
 .log-container {
   flex: 1;

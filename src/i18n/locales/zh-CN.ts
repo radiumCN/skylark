@@ -27,6 +27,7 @@ export default {
     confirmTitle: "确认操作",
     delete: "删除",
     loading: "加载中...",
+    dismiss: "关闭",
   },
   tray: {
     connected: "已连接",
@@ -187,6 +188,7 @@ export default {
     speedNoticeStrong: "下载速度测试需要先启动代理",
     emptyTitle: "暂无节点",
     emptyDesc: "请先在「订阅」页面添加订阅",
+    emptyCta: "去添加订阅",
     autoCardTip: "动态自动选优：内核持续测速并自动切换到延迟最低的节点（Clash.Meta「Auto」）",
     autoAllNodes: "自动选优（全部节点）",
     autoThisSub: "自动选优（本订阅）",
@@ -208,6 +210,7 @@ export default {
     searchPlaceholder: "搜索主机、目标、规则...",
     emptyTitle: "暂无活动连接",
     emptyDesc: "代理运行后将在此显示实时连接信息",
+    emptyCta: "前往仪表盘",
     colHost: "主机",
     colPort: "端口",
     colRule: "规则",
@@ -331,6 +334,7 @@ export default {
     totalRange: "合计（近 {n} 天）",
     dailyTraffic: "每日流量",
     emptyHint: "暂无流量记录。开启代理并产生流量后，每日统计会自动累积（数据每 ~30 秒持久化一次）。",
+    emptyCta: "前往仪表盘",
   },
   settings: {
     language: "语言",

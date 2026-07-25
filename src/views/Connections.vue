@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from "vue";
+import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
-
-const { t } = useI18n();
-import { RefreshCw, Activity, X, Ban } from "@lucide/vue";
+import { RefreshCw, Activity, X, Ban, Home, ChevronUp, ChevronDown } from "@lucide/vue";
 import { formatBytes } from "../utils/format";
 import { useDelayedRefresh } from "../composables/useDelayedRefresh";
 import EmptyState from "../components/EmptyState.vue";
+import Skeleton from "../components/Skeleton.vue";
+
+const { t } = useI18n();
+const router = useRouter();
 
 interface ConnectionInfo {
   id: string;
@@ -25,7 +28,8 @@ interface ConnectionInfo {
 }
 
 const connections = ref<ConnectionInfo[]>([]);
-const loading = ref(false);
+/** First fetch finished — avoids flashing skeleton on every poll. */
+const hydrated = ref(false);
 const { refreshing, refresh } = useDelayedRefresh();
 const search = ref("");
 const grouped = ref(false);
@@ -33,6 +37,8 @@ type SortKey = "default" | "host" | "upload" | "download" | "proto";
 const sortKey = ref<SortKey>("default");
 const sortDir = ref<"asc" | "desc">("desc");
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+const initialLoading = computed(() => !hydrated.value);
 
 const filtered = computed(() => {
   if (!search.value) return connections.value;
@@ -164,7 +170,6 @@ const recentlyClosed = new Set<string>();
 async function fetchConnections() {
   if (fetching) return;
   fetching = true;
-  loading.value = true;
   try {
     const list = await invoke<ConnectionInfo[]>("cmd_get_connections");
     pollFailures = 0;
@@ -180,8 +185,8 @@ async function fetchConnections() {
     pollFailures += 1;
     if (pollFailures >= 2) connections.value = [];
   } finally {
-    loading.value = false;
     fetching = false;
+    hydrated.value = true;
   }
 }
 
@@ -246,12 +251,27 @@ onUnmounted(() => {
 
     <input class="input conn-search" v-model="search" :placeholder="t('connections.searchPlaceholder')" />
 
+    <div v-if="initialLoading" class="conn-skel-list">
+      <div v-for="i in 6" :key="i" class="card conn-skel">
+        <Skeleton width="28%" height="12px" />
+        <Skeleton width="12%" height="12px" />
+        <Skeleton width="18%" height="12px" />
+        <Skeleton width="14%" height="12px" />
+        <Skeleton width="10%" height="12px" />
+      </div>
+    </div>
+
     <EmptyState
-      v-if="connections.length === 0 && !loading"
+      v-else-if="connections.length === 0"
       :icon="Activity"
       :title="t('connections.emptyTitle')"
       :desc="t('connections.emptyDesc')"
-    />
+    >
+      <button class="btn btn-primary" @click="router.push('/home')">
+        <Home :size="14" />
+        {{ t('connections.emptyCta') }}
+      </button>
+    </EmptyState>
     <EmptyState
       v-else-if="filtered.length === 0 && search"
       :icon="Activity"
@@ -264,14 +284,17 @@ onUnmounted(() => {
         <thead>
           <tr>
             <th class="col-host sortable" @click="toggleSort('host')">
-              {{ t('connections.colHost') }}<span v-if="sortKey === 'host'" class="sort-arrow">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              {{ t('connections.colHost') }}
+              <component :is="sortDir === 'asc' ? ChevronUp : ChevronDown" v-if="sortKey === 'host'" :size="12" class="sort-arrow" />
             </th>
             <th class="col-port">{{ t('connections.colCount') }}</th>
             <th class="col-traffic sortable" @click="toggleSort('upload')">
-              {{ t('connections.colUpload') }}<span v-if="sortKey === 'upload'" class="sort-arrow">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              {{ t('connections.colUpload') }}
+              <component :is="sortDir === 'asc' ? ChevronUp : ChevronDown" v-if="sortKey === 'upload'" :size="12" class="sort-arrow" />
             </th>
             <th class="col-traffic sortable" @click="toggleSort('download')">
-              {{ t('connections.colDownload') }}<span v-if="sortKey === 'download'" class="sort-arrow">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              {{ t('connections.colDownload') }}
+              <component :is="sortDir === 'asc' ? ChevronUp : ChevronDown" v-if="sortKey === 'download'" :size="12" class="sort-arrow" />
             </th>
             <th class="col-close"></th>
           </tr>
@@ -298,19 +321,23 @@ onUnmounted(() => {
         <thead>
           <tr>
             <th class="col-host sortable" @click="toggleSort('host')">
-              {{ t('connections.colHost') }}<span v-if="sortKey === 'host'" class="sort-arrow">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              {{ t('connections.colHost') }}
+              <component :is="sortDir === 'asc' ? ChevronUp : ChevronDown" v-if="sortKey === 'host'" :size="12" class="sort-arrow" />
             </th>
             <th class="col-port">{{ t('connections.colPort') }}</th>
             <th class="col-rule">{{ t('connections.colRule') }}</th>
             <th class="col-chain">{{ t('connections.colChain') }}</th>
             <th class="col-traffic sortable" @click="toggleSort('upload')">
-              {{ t('connections.colUpload') }}<span v-if="sortKey === 'upload'" class="sort-arrow">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              {{ t('connections.colUpload') }}
+              <component :is="sortDir === 'asc' ? ChevronUp : ChevronDown" v-if="sortKey === 'upload'" :size="12" class="sort-arrow" />
             </th>
             <th class="col-traffic sortable" @click="toggleSort('download')">
-              {{ t('connections.colDownload') }}<span v-if="sortKey === 'download'" class="sort-arrow">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              {{ t('connections.colDownload') }}
+              <component :is="sortDir === 'asc' ? ChevronUp : ChevronDown" v-if="sortKey === 'download'" :size="12" class="sort-arrow" />
             </th>
             <th class="col-proto sortable" @click="toggleSort('proto')">
-              {{ t('connections.colProto') }}<span v-if="sortKey === 'proto'" class="sort-arrow">{{ sortDir === 'asc' ? '▲' : '▼' }}</span>
+              {{ t('connections.colProto') }}
+              <component :is="sortDir === 'asc' ? ChevronUp : ChevronDown" v-if="sortKey === 'proto'" :size="12" class="sort-arrow" />
             </th>
             <th class="col-close"></th>
           </tr>
@@ -365,7 +392,16 @@ onUnmounted(() => {
 
 .sortable { cursor: pointer; user-select: none; transition: color 0.15s ease-out; }
 .sortable:hover { color: var(--color-text); }
-.sort-arrow { margin-left: 3px; font-size: 9px; color: var(--color-primary); }
+.sort-arrow {
+  margin-left: 3px; vertical-align: -2px;
+  color: var(--color-primary); display: inline;
+}
+
+.conn-skel-list { display: flex; flex-direction: column; gap: 6px; }
+.conn-skel {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 14px;
+}
 
 .conn-table-wrapper {
   flex: 1; min-height: 0; overflow: auto;
@@ -416,13 +452,8 @@ onUnmounted(() => {
   opacity: 0; transition: opacity 0.15s ease-out, background 0.15s ease-out, color 0.15s ease-out;
 }
 .conn-table tr:hover .close-btn { opacity: 1; }
-/* Keyboard users never trigger the row hover — reveal the button on focus too, or the
-   action is mouse-only. */
-.close-btn:focus-visible {
-  opacity: 1;
-  outline: 2px solid var(--color-primary);
-  outline-offset: 1px;
-}
+/* Keyboard users never trigger the row hover — reveal the button on focus too. */
+.close-btn:focus-visible { opacity: 1; }
 .close-btn:hover { background: var(--color-error-soft); color: var(--color-error); }
 
 .text-muted { color: var(--color-text-muted); }

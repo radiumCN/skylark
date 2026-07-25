@@ -73,7 +73,7 @@ function toggle(current: boolean, disabled: boolean) {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: white;
+  background: var(--color-on-primary);
   box-shadow: var(--shadow-sm);
   transition: transform 0.2s ease;
   display: block;

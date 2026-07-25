@@ -107,10 +107,16 @@
   --latency-mid: #b45309;
   --latency-bad: #e5484d;
 
-  /* Decorative stat/icon accents (paired with a soft rgba background in components). */
+  /* Decorative stat/icon accents (paired with soft fills below). */
   --accent-violet: #7c5cec;
   --accent-teal: #0ea394;
   --accent-amber: #c0870f;
+  --accent-violet-soft: rgba(124, 92, 236, 0.14);
+  --accent-teal-soft: rgba(14, 163, 148, 0.14);
+  --accent-amber-soft: rgba(193, 128, 30, 0.14);
+
+  /* Text/icon on solid primary surfaces (buttons, active chips, dirty-dot). */
+  --color-on-primary: #ffffff;
 
   /* Spacing — 4px grid. Use these instead of ad-hoc px so page rhythm stays uniform. */
   --space-1: 4px;
@@ -361,7 +367,7 @@ textarea,
 .btn-danger:disabled:hover { opacity: 0.5; }
 .btn-primary {
   background: var(--color-primary);
-  color: white;
+  color: var(--color-on-primary);
   border-color: transparent;
   box-shadow: 0 2px 10px var(--color-primary-glow);
 }
@@ -375,10 +381,48 @@ textarea,
 .btn-ghost:hover { background: var(--color-neutral); }
 .btn-danger {
   background: var(--color-error);
-  color: white;
+  color: var(--color-on-primary);
   border-color: transparent;
 }
 .btn-danger:hover { opacity: 0.9; }
+.btn-sm {
+  padding: 3px 10px;
+  font-size: var(--fs-sm);
+}
+.btn-sm.danger { color: var(--color-error); }
+
+/* Icon-only control — shared by Nodes / Rules / Subscriptions (and .btn.icon-btn stacks). */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+.icon-btn:hover { background: var(--color-neutral); color: var(--color-text); }
+.icon-btn.danger:hover { background: var(--color-error-soft); color: var(--color-error); }
+.icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.icon-btn:disabled:hover {
+  background: transparent;
+  color: var(--color-text-secondary);
+}
+.btn.icon-btn {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  gap: 0;
+}
 
 /* Input */
 .input {
@@ -490,10 +534,14 @@ details[open] > summary::before { transform: rotate(45deg); }
 /* Keyboard focus visibility (a11y) — only shows on keyboard nav, not mouse */
 .btn:focus-visible,
 .nav-item:focus-visible,
-.mode-pill:focus-visible,
-.mode-btn:focus-visible,
+.icon-btn:focus-visible,
+.toast-close:focus-visible,
+.qr-close:focus-visible,
+.section-chip:focus-visible,
+.preset-btn:focus-visible,
 .node-item:focus-visible,
-.rule-header:focus-visible {
+.rule-header:focus-visible,
+.close-btn:focus-visible {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }

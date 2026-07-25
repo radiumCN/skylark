@@ -153,9 +153,25 @@ const filtered = computed(() => {
   return nodes;
 });
 
-function switchSub(id: string) {
+async function switchSub(id: string) {
   filterSubId.value = id;
   localStorage.setItem("nodes_filter_sub", id);
+
+  // Tab filter used to be display-only; active URLTest stayed on global "auto",
+  // so picking subscription B could still hit a node from A. Keep the live auto
+  // group scoped to the selected tab when auto mode is already on.
+  if (!store.isAutoGroup) return;
+  if (id !== "all") {
+    const count = store.nodes.filter((n) => n.subscription_id === id).length;
+    if (count < 2) return;
+  }
+  const desired = id === "all" ? "auto" : `auto-${id}`;
+  if (store.activeProxyTag === desired) return;
+  try {
+    await store.setAutoNode(id === "all" ? undefined : desired);
+  } catch (e) {
+    fb.toastError(String(e));
+  }
 }
 
 const latencyColor = (ms?: number) => {

@@ -44,6 +44,12 @@ onMounted(() => {
     hasUpdate.value = true;
     updateVersion.value = e.payload.version;
   });
+  listen<{ success: boolean }>("singbox-download-done", (e) => {
+    if (e.payload.success) {
+      hasUpdate.value = false;
+      updateVersion.value = "";
+    }
+  });
 });
 </script>
 

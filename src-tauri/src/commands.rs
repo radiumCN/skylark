@@ -187,16 +187,7 @@ async fn ensure_core_inner(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Make app config the source of truth for routing mode (the core may have a stale
-    // value cached from a previous session — cache_file persists the last mode and the
-    // core boots into it, ignoring default_mode). Verify-and-retry so the live mode can't
-    // silently diverge from config.proxy_mode; log (don't fail the bring-up) if it never
-    // takes, since the core itself is already up.
-    if let Some(m) = clash_mode_str(&config.proxy_mode) {
-        if let Err(e) = clash_set_mode_verified(config.api_port, m).await {
-            log::warn!("核心启动后同步代理模式失败：{}", e);
-        }
-    }
+    sync_clash_state_after_start(&config).await;
 
     Ok(())
 }
@@ -1442,11 +1433,7 @@ async fn rebuild_and_restart_core(
             let _ = config::save_app_config(&cfg_clone);
             return Err(e.to_string());
         }
-        if let Some(m) = clash_mode_str(&config.proxy_mode) {
-            if let Err(e) = clash_set_mode_verified(config.api_port, m).await {
-                log::warn!("核心重建后同步代理模式失败：{}", e);
-            }
-        }
+        sync_clash_state_after_start(&config).await;
     }
     Ok(())
 }
@@ -1656,6 +1643,77 @@ async fn clash_set_mode_verified(api_port: u16, mode: &str) -> Result<(), String
         }
     }
     Err(format!("设置代理模式({mode})未生效: {last_err}"))
+}
+
+/// Read a selector/urltest group's current pick via `GET /proxies/{group}`.
+async fn clash_proxy_now(api_port: u16, group: &str) -> Result<String, String> {
+    let mut endpoint = reqwest::Url::parse(&format!("http://127.0.0.1:{}/proxies", api_port))
+        .map_err(|e| e.to_string())?;
+    if let Ok(mut seg) = endpoint.path_segments_mut() {
+        seg.push(group);
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .no_proxy()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(endpoint)
+        .bearer_auth(crate::config::api_secret())
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("Clash API 返回 {}", resp.status()));
+    }
+    let body: Value = resp.json().await.map_err(|e| e.to_string())?;
+    body.get("now")
+        .and_then(|n| n.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Clash /proxies 响应缺少 now 字段".to_string())
+}
+
+/// Select an outbound and CONFIRM the selector stuck, same retry window as
+/// [`clash_set_mode_verified`]. `cache_file` persists the last `selected` pick and
+/// restores it on every boot, ignoring the config `default` — so a switch to
+/// `auto-<sub>` would still route through the previously chosen concrete node
+/// (often another subscription) until we force the selector here.
+async fn clash_select_proxy_verified(api_port: u16, group: &str, name: &str) -> Result<(), String> {
+    let mut last_err = String::new();
+    for attempt in 0..6 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+        if let Err(e) = clash_select_proxy(api_port, group, name).await {
+            last_err = e;
+            continue;
+        }
+        match clash_proxy_now(api_port, group).await {
+            Ok(current) if current == name => return Ok(()),
+            Ok(current) => last_err = format!("下发 {name} 后内核仍为 {current}"),
+            Err(e) => last_err = e,
+        }
+    }
+    Err(format!("设置出站({name})未生效: {last_err}"))
+}
+
+/// After a core (re)start, overwrite the two values `cache_file` restores from the last
+/// session: clash routing mode and the `proxy` selector's pick. App config is the source
+/// of truth; a failed sync is logged, not fatal — the core is already up.
+async fn sync_clash_state_after_start(config: &AppConfig) {
+    if let Some(m) = clash_mode_str(&config.proxy_mode) {
+        if let Err(e) = clash_set_mode_verified(config.api_port, m).await {
+            log::warn!("核心启动后同步代理模式失败：{}", e);
+        }
+    }
+    if let Some(tag) = config.active_nodes.get("proxy") {
+        if !tag.is_empty() {
+            if let Err(e) = clash_select_proxy_verified(config.api_port, "proxy", tag).await {
+                log::warn!("核心启动后同步出站选择失败：{}", e);
+            }
+        }
+    }
 }
 
 #[tauri::command]

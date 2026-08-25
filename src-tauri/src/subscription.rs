@@ -2282,7 +2282,10 @@ pub fn build_singbox_config(
             },
             /* Persist routing/fake-ip state across restarts. store_fakeip keeps the
                domain↔fake-IP mapping stable so long-lived connections survive a
-               proxy restart instead of resolving to a stale address.
+               proxy restart instead of resolving to a stale address. Also persists
+               clash mode and the selector's last pick — those two are overwritten
+               after start from app config (see sync_clash_state_after_start), or a
+               previous session's node would keep winning over the config `default`.
 
                `path` MUST be absolute: sing-box otherwise opens `cache.db` relative to
                its working directory, which for a GUI app launched from /Applications is

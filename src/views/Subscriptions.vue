@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted } from "vue";
+import { ref, computed, nextTick } from "vue";
 import {
   Plus, RefreshCw, Trash2, QrCode, Clock, Server, AlertCircle, X, Copy, Check as CheckIcon, Zap, Filter
 } from "@lucide/vue";
@@ -19,11 +19,6 @@ import Select from "../components/Select.vue";
 const { t } = useI18n();
 const store = useAppStore();
 const fb = useFeedbackStore();
-
-onMounted(() => {
-  // Shared poller keeps the active auto group's current node fresh for the badge below.
-  store.ensureActiveNowPoller();
-});
 
 const showAddDialog = ref(false);
 const addMode = ref<"url" | "text">("url");

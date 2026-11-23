@@ -15,13 +15,15 @@ fn notify(app_handle: &tauri::AppHandle, title: &str, body: &str) {
         .show();
 }
 
-/// Compare two dotted numeric versions and report whether `latest` is strictly newer
-/// than `current`. A leading `v` and any pre-release suffix after `-` are ignored, and
-/// non-numeric / missing components are treated as 0 so a malformed value can never
-/// spuriously trigger an "update available". This replaces a plain `!=` comparison,
-/// which wrongly fired when the local version merely differed (e.g. equal-but-tagged,
-/// or a manually-installed newer build).
+/// Compare release tags by SemVer, with a numeric fallback for older kernel version strings.
 fn is_newer_version(latest: &str, current: &str) -> bool {
+    fn parse(version: &str) -> Result<semver::Version, semver::Error> {
+        semver::Version::parse(version.trim().trim_start_matches('v'))
+    }
+    if let (Ok(latest), Ok(current)) = (parse(latest), parse(current)) {
+        return latest.cmp_precedence(&current).is_gt();
+    }
+
     fn parts(v: &str) -> Vec<u64> {
         v.trim().trim_start_matches('v')
             .split('-')
@@ -41,6 +43,20 @@ fn is_newer_version(latest: &str, current: &str) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_newer_version;
+
+    #[test]
+    fn compares_beta_releases_and_the_corresponding_stable_release() {
+        assert!(is_newer_version("v0.5.11-beta.1", "0.5.10"));
+        assert!(is_newer_version("v0.5.11-beta.10", "0.5.11-beta.2"));
+        assert!(is_newer_version("v0.5.11", "0.5.11-beta.1"));
+        assert!(!is_newer_version("v0.5.11-beta.1", "0.5.11"));
+        assert!(!is_newer_version("v0.5.11+rebuilt", "0.5.11"));
+    }
 }
 
 /// Background task: check for sing-box updates on startup and periodically.

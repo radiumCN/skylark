@@ -143,19 +143,16 @@ pub fn set_system_proxy(enabled: bool, port: u16, _global_mode: bool) -> Result<
 
 #[cfg(target_os = "macos")]
 pub fn get_system_proxy_status() -> bool {
-    for svc in macos_network_services() {
-        let output = std::process::Command::new("networksetup")
-            .args(["-getwebproxy", &svc])
-            .output();
-        if let Ok(output) = output {
-            let text = String::from_utf8_lossy(&output.stdout);
-            // `networksetup -getwebproxy` prints a line like "Enabled: Yes".
-            if text.lines().any(|l| l.trim() == "Enabled: Yes") {
-                return true;
-            }
-        }
-    }
-    false
+    use system_configuration::core_foundation::number::CFNumber;
+    use system_configuration::dynamic_store::SCDynamicStoreBuilder;
+    use system_configuration::sys::schema_definitions::kSCPropNetProxiesHTTPEnable;
+
+    SCDynamicStoreBuilder::new("Skylark").build()
+        .and_then(|store| store.get_proxies())
+        .and_then(|proxies| proxies.find(unsafe { kSCPropNetProxiesHTTPEnable })
+            .and_then(|flag| flag.downcast::<CFNumber>()))
+        .and_then(|flag| flag.to_i32())
+        == Some(1)
 }
 
 // ─── Linux / other Unix (GNOME gsettings) ──────────────────────────

@@ -508,16 +508,35 @@ const appDownloadError = ref("");
 // `current`. Mirrors the Rust `is_newer_version` so a beta channel whose latest release
 // is OLDER than the installed build (e.g. 0.3.4 vs 0.3.5) is not flagged as an update.
 function isNewerVersion(latest: string, current: string): boolean {
-  const parts = (v: string) =>
-    v.trim().replace(/^v/, "").split("-")[0].split(".").map((s) => parseInt(s, 10) || 0);
+  function parts(version: string) {
+    const clean = version.trim().replace(/^v/, "").split("+", 1)[0];
+    const [base, ...suffix] = clean.split("-");
+    return {
+      base: base.split(".").map((part) => parseInt(part, 10) || 0),
+      prerelease: suffix.length ? suffix.join("-").split(".") : [],
+    };
+  }
   const a = parts(latest);
   const b = parts(current);
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const x = a[i] ?? 0;
-    const y = b[i] ?? 0;
+  for (let i = 0; i < Math.max(a.base.length, b.base.length); i++) {
+    const x = a.base[i] ?? 0;
+    const y = b.base[i] ?? 0;
     if (x !== y) return x > y;
   }
-  return false;
+  if (!a.prerelease.length || !b.prerelease.length) {
+    return a.prerelease.length < b.prerelease.length;
+  }
+  for (let i = 0; i < Math.min(a.prerelease.length, b.prerelease.length); i++) {
+    const x = a.prerelease[i];
+    const y = b.prerelease[i];
+    if (x === y) continue;
+    const xNumeric = /^\d+$/.test(x);
+    const yNumeric = /^\d+$/.test(y);
+    if (xNumeric !== yNumeric) return !xNumeric;
+    if (xNumeric && x.length !== y.length) return x.length > y.length;
+    return x > y;
+  }
+  return a.prerelease.length > b.prerelease.length;
 }
 
 const hasAppUpdate = computed(() => {

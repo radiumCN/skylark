@@ -9,13 +9,23 @@ mod tun;
 mod rules;
 mod auto_update;
 mod stats;
+mod traffic;
 mod commands;
 
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use commands::{AppState, TrayState};
+
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        let _ = app.emit("main-window-visibility-changed", ());
+    }
+}
 
 /// Update both tray check items to reflect the real runtime state. The two are
 /// mutually exclusive: at most one is checked, and only while sing-box is running.
@@ -160,12 +170,7 @@ pub fn run() {
         // launch is redirected here instead of starting a rival process — which would fight
         // over the mixed/API ports and the TUN adapter — and we surface the existing window.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            use tauri::Manager;
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+            show_main_window(app);
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
@@ -200,6 +205,7 @@ pub fn run() {
                 if close_to_tray {
                     api.prevent_close();
                     let _ = window.hide();
+                    let _ = window.emit("main-window-visibility-changed", ());
                 } else {
                     // Real exit: tear down the persistent core and clear the system proxy
                     // first (otherwise the registry would keep pointing at a dead port and
@@ -458,6 +464,7 @@ pub fn run() {
                     // elapses, so its item handles are available here. Reconcile the
                     // checkmarks with the real running state instead of the persisted flag.
                     sync_tray_from_state(&handle);
+                    let _ = handle.emit("connection-mode-changed", ());
                 });
             }
 
@@ -543,10 +550,7 @@ pub fn run() {
                 .on_menu_event(move |app, event| {
                     match event.id.as_ref() {
                         "dashboard" => {
-                            if let Some(w) = app.get_webview_window("main") {
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                            }
+                            show_main_window(app);
                         }
                         "system_proxy" => {
                             // is_checked() reflects the NEW state after the click.
@@ -620,10 +624,7 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        if let Some(w) = tray.app_handle().get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
+                        show_main_window(tray.app_handle());
                     }
                 })
                 .build(app)?;
@@ -662,8 +663,6 @@ pub fn run() {
             commands::cmd_get_connections,
             commands::cmd_close_connection,
             commands::cmd_close_all_connections,
-            commands::cmd_get_traffic_total,
-            commands::cmd_add_traffic_sample,
             commands::cmd_get_traffic_history,
             commands::cmd_run_diagnostics,
             commands::cmd_parse_subscription_from_text,

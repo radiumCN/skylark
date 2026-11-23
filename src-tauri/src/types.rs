@@ -247,7 +247,7 @@ impl Default for AppConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SingboxStatus {
     pub running: bool,
     /// Whether the running core is ACTUALLY in TUN mode right now (`running && tun_mode`).
@@ -258,4 +258,5 @@ pub struct SingboxStatus {
     pub uptime: Option<u64>, // seconds
     pub pid: Option<u32>,
     pub version: Option<String>,
+    pub traffic: crate::traffic::TrafficSnapshot,
 }

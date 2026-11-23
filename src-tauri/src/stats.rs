@@ -1,9 +1,7 @@
 //! Persistent daily traffic statistics.
 //!
-//! The frontend already derives per-second up/down deltas from the core's cumulative
-//! counters. It periodically flushes accumulated bytes here via `cmd_add_traffic_sample`;
-//! we bucket them by calendar day and persist to `traffic_stats.json` so totals survive
-//! restarts (the in-session counters reset every proxy restart by design).
+//! The core traffic monitor supplies deltas from successive cumulative samples.
+//! We bucket them by calendar day and persist them to `traffic_stats.json`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

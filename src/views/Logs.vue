@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick, watch, computed } from "vue";
+import { ref, nextTick, watch, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -8,9 +8,11 @@ import { useI18n } from "vue-i18n";
 import { useTemporaryFlag } from "../composables/useTemporaryFlag";
 import { copyToClipboard } from "../utils/clipboard";
 import EmptyState from "../components/EmptyState.vue";
+import { useAppStore } from "../stores/app";
 import { useFeedbackStore } from "../stores/feedback";
 
 const { t } = useI18n();
+const store = useAppStore();
 const fb = useFeedbackStore();
 
 const LOG_CAP = 1000;
@@ -18,7 +20,6 @@ const logs = ref<string[]>([]);
 const autoScroll = ref(true);
 const filterLevel = ref("all");
 const logContainer = ref<HTMLElement | null>(null);
-let unlistenLog: UnlistenFn | null = null;
 
 const levelColors: Record<string, string> = {
   error: "var(--color-error)",
@@ -42,14 +43,6 @@ const filtered = computed(() => {
   if (filterLevel.value === "all") return parsedLogs.value;
   return parsedLogs.value.filter((l) => l.level === filterLevel.value);
 });
-
-async function fetchLogs() {
-  try {
-    logs.value = await invoke<string[]>("cmd_get_logs");
-  } catch {
-    // ignore
-  }
-}
 
 const { flag: copySuccess, trigger: triggerCopySuccess } = useTemporaryFlag(1500);
 
@@ -88,30 +81,30 @@ async function exportLogs() {
 
 watch(filtered, scrollToBottom);
 
-// True once onUnmounted has run. The listen() below resolves AFTER awaits in onMounted,
-// so a fast navigate-away would otherwise register the listener after cleanup already
-// looked at a null handle — leaking it (plus this component's log buffer) forever.
-let disposed = false;
-onMounted(async () => {
-  // Load the current buffer once, then receive new lines incrementally via events
-  // instead of re-cloning the whole buffer on a timer.
-  await fetchLogs();
-  const un = await listen<string>("singbox-log", (e) => {
-    logs.value.push(e.payload);
-    if (logs.value.length > LOG_CAP) {
-      logs.value.splice(0, logs.value.length - LOG_CAP);
-    }
+watch(() => store.windowVisible, async (visible, _, onCleanup) => {
+  if (!visible) return;
+  let active = true;
+  let unlisten: UnlistenFn | undefined;
+  onCleanup(() => {
+    active = false;
+    unlisten?.();
   });
-  if (disposed) {
-    un();
-    return;
+
+  const buffer = await invoke<string[]>("cmd_get_logs").catch(() => undefined);
+  if (!active) return;
+  if (buffer) logs.value = buffer;
+
+  const stop = await listen<string>("singbox-log", ({ payload }) => {
+    if (!active) return;
+    logs.value.push(payload);
+    if (logs.value.length > LOG_CAP) logs.value.shift();
+  }).catch(() => undefined);
+  if (active) {
+    unlisten = stop;
+  } else {
+    stop?.();
   }
-  unlistenLog = un;
-});
-onUnmounted(() => {
-  disposed = true;
-  if (unlistenLog) unlistenLog();
-});
+}, { immediate: true });
 </script>
 
 <template>

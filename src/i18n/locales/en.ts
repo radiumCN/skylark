@@ -61,7 +61,7 @@ export default {
     globalMode: "Global Proxy",
     directMode: "Direct Mode",
     uptime: "Uptime",
-    memory: "Memory {value}",
+    memory: "Core memory {value}",
     networkSettings: "Network Settings",
     connecting: "Connecting…",
     disconnecting: "Disconnecting…",

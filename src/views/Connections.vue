@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw, Activity, X, Ban, Home, ChevronUp, ChevronDown } from "@lucide/vue";
 import { formatBytes } from "../utils/format";
 import { useDelayedRefresh } from "../composables/useDelayedRefresh";
+import { useAppStore } from "../stores/app";
 import EmptyState from "../components/EmptyState.vue";
 import Skeleton from "../components/Skeleton.vue";
 
 const { t } = useI18n();
 const router = useRouter();
+const store = useAppStore();
 
 interface ConnectionInfo {
   id: string;
@@ -36,7 +38,6 @@ const grouped = ref(false);
 type SortKey = "default" | "host" | "upload" | "download" | "proto";
 const sortKey = ref<SortKey>("default");
 const sortDir = ref<"asc" | "desc">("desc");
-let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const initialLoading = computed(() => !hydrated.value);
 
@@ -210,13 +211,12 @@ async function closeAll() {
   }
 }
 
-onMounted(() => {
-  fetchConnections();
-  pollTimer = setInterval(fetchConnections, 2000);
-});
-onUnmounted(() => {
-  if (pollTimer) clearInterval(pollTimer);
-});
+watch(() => store.windowVisible, (visible, _, onCleanup) => {
+  if (!visible) return;
+  void fetchConnections();
+  const timer = setInterval(fetchConnections, 2000);
+  onCleanup(() => clearInterval(timer));
+}, { immediate: true });
 </script>
 
 <template>

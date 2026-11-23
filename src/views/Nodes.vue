@@ -49,8 +49,6 @@ watch(() => store.subscriptions.length, validateSubFilter);
 
 onMounted(() => {
   validateSubFilter();
-  // Use the store's single shared poller for the active auto group's current node.
-  store.ensureActiveNowPoller();
   store.fetchProxyGroups();
 });
 

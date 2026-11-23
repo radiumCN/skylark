@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow};
 use serde_json::Value;
@@ -165,6 +165,7 @@ pub struct SingboxState {
     /// superseded it (a fast restart) and must neither clobber the new core's state nor
     /// report a crash. Closes the stop→start race around crash detection.
     pub epoch: u64,
+    pub traffic: Option<Arc<crate::traffic::TrafficMonitor>>,
 }
 
 impl Default for SingboxState {
@@ -178,6 +179,7 @@ impl Default for SingboxState {
             tun_mode: false,
             stopping: false,
             epoch: 0,
+            traffic: None,
         }
     }
 }
@@ -455,6 +457,7 @@ pub async fn start_singbox(
         let pid = child.id();
         // Capture this core's epoch so the exit handler below can detect whether a newer
         // core has since superseded it (fast restart) and must not report a crash.
+        let traffic = Arc::new(crate::traffic::TrafficMonitor::new(api_port));
         let my_epoch = {
             let mut s = state_clone.lock().unwrap_or_else(|e| e.into_inner());
             s.running = true;
@@ -463,6 +466,7 @@ pub async fn start_singbox(
             s.tun_mode = tun_mode;
             s.stopping = false;
             s.epoch = s.epoch.wrapping_add(1);
+            s.traffic = Some(traffic.clone());
             s.epoch
         };
 
@@ -514,7 +518,10 @@ pub async fn start_singbox(
             });
         }
 
-        let _ = child.wait().await;
+        tokio::select! {
+            _ = child.wait() => {}
+            _ = traffic.run(tun_mode) => {}
+        }
         // The core has exited. Decide what this exit means under the state lock:
         //   • superseded → a newer core (higher epoch) already replaced us; do NOTHING so we
         //     don't clobber the new core's state or fire a spurious crash.
@@ -532,6 +539,7 @@ pub async fn start_singbox(
                 s.pid = None;
                 s.start_time = None;
                 s.tun_mode = false;
+                s.traffic = None;
                 unexpected
             }
         };
@@ -568,6 +576,7 @@ pub async fn start_singbox(
             s.pid = None;
             s.start_time = None;
             s.tun_mode = false;
+            s.traffic = None;
         }
         let base = "sing-box 启动失败：控制端口未就绪（配置无效 / 端口被占用 / TUN 需要管理员权限）";
         return Err(if tail.trim().is_empty() {
@@ -591,11 +600,20 @@ pub async fn start_singbox(
 /// task flips to false the moment `child.wait()` returns. This avoids spawning a slow
 /// `tasklist` process on every poll (the old approach cost up to ~3s).
 pub async fn stop_singbox(state: SharedState, graceful: bool) -> Result<()> {
-    let (running, pid) = {
+    let (traffic, tun_mode) = {
         // Mark the coming exit as intentional BEFORE signalling the core, so the process-exit
         // waiter reports it as a normal stop rather than a crash (no proxy clear / crash event).
         let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
         s.stopping = true;
+        (s.traffic.clone(), s.tun_mode)
+    };
+    if let Some(traffic) = traffic {
+        if tun_mode || crate::proxy::get_system_proxy_status() {
+            traffic.finish().await;
+        }
+    }
+    let (running, pid) = {
+        let s = state.lock().unwrap_or_else(|e| e.into_inner());
         (s.running, s.pid)
     };
 
@@ -608,6 +626,7 @@ pub async fn stop_singbox(state: SharedState, graceful: bool) -> Result<()> {
         s.running = false;
         s.pid = None;
         s.start_time = None;
+        s.traffic = None;
         return Ok(());
     }
 
@@ -699,21 +718,43 @@ pub async fn stop_singbox(state: SharedState, graceful: bool) -> Result<()> {
     s.running = false;
     s.pid = None;
     s.start_time = None;
+    s.traffic = None;
 
     Ok(())
 }
 
 
+/// Share the connection pool across local API calls. The read timeout also
+/// detects a stalled /traffic stream without limiting its total lifetime.
+pub fn clash_request(
+    method: reqwest::Method,
+    api_port: u16,
+    path: &str,
+) -> Result<reqwest::RequestBuilder> {
+    static CLIENT: OnceLock<reqwest::Result<reqwest::Client>> = OnceLock::new();
+    let client = CLIENT
+        .get_or_init(|| {
+            reqwest::Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .connect_timeout(Duration::from_secs(2))
+                .read_timeout(Duration::from_secs(4))
+                .build()
+        })
+        .as_ref()
+        .map_err(|error| anyhow!("{error}"))?;
+    Ok(client
+        .request(method, format!("http://127.0.0.1:{api_port}{path}"))
+        .bearer_auth(crate::config::api_secret()))
+}
+
 /// Fetch connections from Clash API
 pub async fn fetch_connections(api_port: u16) -> Result<Vec<crate::types::ConnectionInfo>> {
-    let url = format!("http://127.0.0.1:{}/connections", api_port);
-    // Local Clash API call — bypass any env-var HTTP(S)_PROXY so it always goes direct.
-    let client = reqwest::Client::builder().no_proxy().build()?;
-    let resp = client.get(&url)
-        .bearer_auth(crate::config::api_secret())
+    let resp = clash_request(reqwest::Method::GET, api_port, "/connections")?
         .timeout(Duration::from_secs(2))
         .send()
-        .await?;
+        .await?
+        .error_for_status()?;
     let body: Value = resp.json().await?;
 
     let mut result = Vec::new();
@@ -751,11 +792,7 @@ pub async fn fetch_connections(api_port: u16) -> Result<Vec<crate::types::Connec
 
 /// Close a single active connection via the Clash API (`DELETE /connections/{id}`).
 pub async fn close_connection(api_port: u16, id: &str) -> Result<()> {
-    let url = format!("http://127.0.0.1:{}/connections/{}", api_port, id);
-    // Local Clash API call — bypass any env-var HTTP(S)_PROXY so it always goes direct.
-    let client = reqwest::Client::builder().no_proxy().build()?;
-    client.delete(&url)
-        .bearer_auth(crate::config::api_secret())
+    clash_request(reqwest::Method::DELETE, api_port, &format!("/connections/{id}"))?
         .timeout(Duration::from_secs(3))
         .send()
         .await?
@@ -765,11 +802,7 @@ pub async fn close_connection(api_port: u16, id: &str) -> Result<()> {
 
 /// Close all active connections via the Clash API (`DELETE /connections`).
 pub async fn close_all_connections(api_port: u16) -> Result<()> {
-    let url = format!("http://127.0.0.1:{}/connections", api_port);
-    // Local Clash API call — bypass any env-var HTTP(S)_PROXY so it always goes direct.
-    let client = reqwest::Client::builder().no_proxy().build()?;
-    client.delete(&url)
-        .bearer_auth(crate::config::api_secret())
+    clash_request(reqwest::Method::DELETE, api_port, "/connections")?
         .timeout(Duration::from_secs(3))
         .send()
         .await?

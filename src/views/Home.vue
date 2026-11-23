@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onUnmounted, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import {
   Wifi, WifiOff, ArrowUp, ArrowDown,
   Filter, Server, Clock, Globe, Shield, AlertTriangle
@@ -13,15 +13,6 @@ import StatTile from "../components/StatTile.vue";
 
 const { t } = useI18n();
 const store = useAppStore();
-const systemProxyReady = ref(false);
-
-// System proxy state now lives in the store (refreshed globally). Keep a thin local
-// wrapper so existing call sites read through to the store.
-const systemProxyEnabled = computed(() => store.systemProxyEnabled);
-async function fetchSystemProxy() {
-  await store.refreshSystemProxy();
-}
-
 // The two mutually-exclusive connection switches. While a switch is being applied
 // (store.connecting), reflect the target optimistically so the toggle flips instantly;
 // otherwise derive on-state from the actual runtime status so the UI mirrors reality.
@@ -30,7 +21,7 @@ const systemProxyOn = computed(() => {
   if (store.connecting === "tun" || store.connecting === "off") return false;
   // Reflect the real runtime state: system proxy on AND the core is not actually in TUN.
   // (tun_active is the backend truth; config.tun_enabled is only a persisted preference.)
-  return store.status.running && systemProxyEnabled.value && store.status.tun_active !== true;
+  return store.status.running && store.systemProxyEnabled && store.status.tun_active !== true;
 });
 const tunOn = computed(() => {
   if (store.connecting === "tun") return true;
@@ -58,7 +49,6 @@ async function toggleSystemProxy() {
   wasSystem.value = turningOff;
   wasTun.value = false;
   await store.setConnectionMode(turningOff ? "off" : "system");
-  await fetchSystemProxy();
 }
 
 async function toggleTun() {
@@ -66,14 +56,12 @@ async function toggleTun() {
   wasTun.value = turningOff;
   wasSystem.value = false;
   await store.setConnectionMode(turningOff ? "off" : "tun");
-  await fetchSystemProxy();
 }
 // Cumulative totals since the proxy session start. Live up/down speed now lives
 // in the sidebar, so the dashboard only surfaces the running totals here.
 const totalUpload = computed(() => store.totalUpload);
 const totalDownload = computed(() => store.totalDownload);
 const memoryUsage = ref<number | null>(null);
-let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 // Proxy session timer — tracks how long the proxy has been actively proxying in the
 // current session. The session START lives in the store (`proxySessionStartMs`) so it
@@ -108,48 +96,39 @@ const proxyModeLabel = computed(() => {
   return map[store.config.proxy_mode] ?? store.config.proxy_mode;
 });
 
-// True once onUnmounted has run. The interval below is created AFTER awaits in onMounted,
-// so a fast navigate-away would otherwise see a null pollTimer during cleanup and the
-// later-created interval would tick (two IPCs per second) forever.
-let disposed = false;
-onMounted(async () => {
-  // Fetch the real state first, then enable transitions to avoid the initial "flash" animation.
-  await fetchSystemProxy();
-  await nextTick();
-  if (disposed) return;
-  systemProxyReady.value = true;
+watch(() => store.windowVisible, (visible, _, onCleanup) => {
+  if (!visible) return;
 
-  // Shared pollers (status + active node + traffic totals) run at app scope. The traffic
-  // poller also owns the proxy-session start time, so the uptime is correct on mount.
-  store.ensureActiveNowPoller();
-  store.ensureTrafficPoller();
+  nowMs.value = Date.now();
+  const clock = setInterval(() => { nowMs.value = Date.now(); }, 1000);
+  onCleanup(() => clearInterval(clock));
+}, { immediate: true });
 
-  let lastProxying = store.proxying;
+watch([() => store.windowVisible, () => store.status.pid], ([visible, pid], _, onCleanup) => {
+  if (!visible) return;
 
-  pollTimer = setInterval(async () => {
-    // Always sync system proxy — avoids the timing race where the watcher fired
-    // before the backend finished setting the proxy on auto-restore startup.
-    fetchSystemProxy();
-    // Drive the uptime display; the session start itself lives in the store.
-    nowMs.value = Date.now();
-
-    // React to proxy connect/disconnect transitions (tray tooltip only — the session
-    // timer is maintained by the store's traffic poller).
-    if (store.proxying !== lastProxying) {
-      lastProxying = store.proxying;
-      store.updateTrayTooltip();
+  memoryUsage.value = null;
+  if (!pid) return;
+  let cancelled = false;
+  let sampling = false;
+  async function sampleMemory() {
+    if (sampling) return;
+    sampling = true;
+    try {
+      const bytes = await invoke<number | null>("cmd_get_memory_usage").catch(() => null);
+      if (!cancelled) memoryUsage.value = bytes;
+    } finally {
+      sampling = false;
     }
+  }
 
-    memoryUsage.value = store.status.running
-      ? await invoke<number | null>("cmd_get_memory_usage").catch(() => null)
-      : null;
-  }, 1000);
-});
-
-onUnmounted(() => {
-  disposed = true;
-  if (pollTimer) clearInterval(pollTimer);
-});
+  void sampleMemory();
+  const timer = setInterval(sampleMemory, 5000);
+  onCleanup(() => {
+    cancelled = true;
+    clearInterval(timer);
+  });
+}, { immediate: true });
 </script>
 
 <template>

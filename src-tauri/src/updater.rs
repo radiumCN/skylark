@@ -763,13 +763,13 @@ pub async fn fetch_app_release(channel: &str, force_refresh: bool) -> Result<App
 
     let body: serde_json::Value = resp.json().await?;
 
-    // For beta channel the API returns an array; pick the first (most recent) release
+    // An authenticated request can also see draft releases while CI is uploading assets.
     let release_body = if channel == "beta" {
         let arr = body.as_array().ok_or_else(|| anyhow!("无法解析版本列表"))?;
-        if arr.is_empty() {
-            return Err(anyhow!("暂无可用版本"));
-        }
-        arr[0].clone()
+        arr.iter()
+            .find(|release| release["draft"].as_bool() != Some(true))
+            .cloned()
+            .ok_or_else(|| anyhow!("暂无可用版本"))?
     } else {
         body
     };

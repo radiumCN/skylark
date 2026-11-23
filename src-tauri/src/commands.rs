@@ -261,15 +261,18 @@ pub async fn apply_connection_mode(
     let _guard = state.core_lock.lock().await;
 
     if mode == "off" {
-        clear_system_proxy_logged();
         // If TUN is active, return the core to the idle mixed-only state.
-        let in_tun = {
+        let (in_tun, traffic) = {
             let s = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner());
-            s.running && s.tun_mode
+            (s.running && s.tun_mode, s.traffic.clone())
         };
+        let finish_system_traffic = !in_tun && traffic.is_some() && proxy::get_system_proxy_status();
+        clear_system_proxy_logged();
         if in_tun {
             // Best-effort: failing to rebuild idle still leaves us with proxy cleared.
             let _ = ensure_core_inner(app_handle, state, false).await;
+        } else if let Some(traffic) = traffic.filter(|_| finish_system_traffic) {
+            traffic.finish().await;
         }
         let mut cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
         cfg.last_proxy_running = false;
@@ -338,6 +341,9 @@ pub async fn apply_connection_mode(
         let cfg_clone = cfg.clone();
         drop(cfg);
         let _ = config::save_app_config(&cfg_clone);
+    }
+    if let Some(traffic) = &state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).traffic {
+        traffic.refresh();
     }
     Ok(())
 }
@@ -426,6 +432,7 @@ pub fn cmd_get_singbox_status(
         uptime: s.start_time.map(|t| t.elapsed().as_secs()),
         pid: s.pid,
         version: s.version.clone(),
+        traffic: s.traffic.as_ref().map(|traffic| traffic.snapshot()).unwrap_or_default(),
     }
 }
 
@@ -1803,68 +1810,6 @@ pub async fn cmd_close_all_connections(
         .map_err(|e| e.to_string())
 }
 
-/* Cumulative traffic counters reported by the Clash API, in bytes. The core keeps
-   these from the moment it starts, so they represent ALL traffic since the proxy
-   service started — independent of which UI page is open. They reset to zero each
-   time the core restarts. */
-#[derive(serde::Serialize, Default)]
-pub struct TrafficTotal {
-    pub upload: u64,
-    pub download: u64,
-}
-
-/// Returns total upload/download bytes since the sing-box core started by reading
-/// the top-level `uploadTotal`/`downloadTotal` of the Clash `/connections` endpoint.
-/// Returns zeros when the core is not running or the query fails.
-#[tauri::command]
-pub async fn cmd_get_traffic_total(
-    state: State<'_, AppState>,
-) -> Result<TrafficTotal, String> {
-    let (api_port, running) = {
-        let cfg = state.app_config.lock().unwrap_or_else(|e| e.into_inner());
-        let running = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).running;
-        (cfg.api_port, running)
-    };
-    if !running {
-        return Ok(TrafficTotal::default());
-    }
-
-    let url = format!("http://127.0.0.1:{}/connections", api_port);
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .no_proxy()
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return Ok(TrafficTotal::default()),
-    };
-
-    /* Best-effort: a transient API hiccup should not surface as a hard error in the
-       UI — fall back to zeros so the poller simply keeps the last good display. */
-    let body: Value = match client.get(&url)
-        .bearer_auth(crate::config::api_secret())
-        .send().await
-    {
-        Ok(resp) => match resp.json().await {
-            Ok(v) => v,
-            Err(_) => return Ok(TrafficTotal::default()),
-        },
-        Err(_) => return Ok(TrafficTotal::default()),
-    };
-
-    Ok(TrafficTotal {
-        upload: body["uploadTotal"].as_u64().unwrap_or(0),
-        download: body["downloadTotal"].as_u64().unwrap_or(0),
-    })
-}
-
-/// Accumulate transferred bytes into today's persistent traffic bucket. Called
-/// periodically by the frontend traffic monitor with the bytes seen since the last flush.
-#[tauri::command]
-pub fn cmd_add_traffic_sample(upload: u64, download: u64) {
-    crate::stats::record_today(upload, download);
-}
-
 /// Recent daily traffic history (oldest-first). `days = None`/0 returns all retained days.
 #[tauri::command]
 pub fn cmd_get_traffic_history(days: Option<usize>) -> Vec<crate::stats::TrafficDay> {
@@ -2277,7 +2222,11 @@ pub fn cmd_sync_tray_menu(
 /// or None if sing-box is not running or the query fails.
 #[tauri::command]
 pub fn cmd_get_memory_usage(state: State<AppState>) -> Option<u64> {
-    let pid = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner()).pid?;
+    let s = state.singbox_state.lock().unwrap_or_else(|e| e.into_inner());
+    let pid = s.pid?;
+    #[cfg(target_os = "macos")]
+    let tun_mode = s.tun_mode;
+    drop(s);
 
     #[cfg(target_os = "windows")]
     unsafe {
@@ -2301,17 +2250,25 @@ pub fn cmd_get_memory_usage(state: State<AppState>) -> Option<u64> {
         if ok != 0 { Some(pmc.WorkingSetSize as u64) } else { None }
     }
 
-    // macOS: read resident set size (in KB) from `ps`.
     #[cfg(target_os = "macos")]
     {
-        let output = std::process::Command::new("ps")
+        let pid = i32::try_from(pid).ok()?;
+        let pid = if tun_mode { macos_tun_core_pid(pid, 3)? } else { pid };
+        let mut info = std::mem::MaybeUninit::<libc::proc_taskinfo>::uninit();
+        let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
+        // SAFETY: proc_pidinfo writes at most size bytes to the provided buffer.
+        let read = unsafe {
+            libc::proc_pidinfo(pid, libc::PROC_PIDTASKINFO, 0, info.as_mut_ptr().cast(), size)
+        };
+        if read == size {
+            // SAFETY: The kernel reported a complete proc_taskinfo.
+            return Some(unsafe { info.assume_init() }.pti_resident_size);
+        }
+        // libproc rejects task info for the root-owned TUN core from a normal GUI.
+        let output = std::process::Command::new("/bin/ps")
             .args(["-o", "rss=", "-p", &pid.to_string()])
-            .output()
-            .ok()?;
-        let kb: u64 = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .parse()
-            .ok()?;
+            .output().ok()?;
+        let kb: u64 = std::str::from_utf8(&output.stdout).ok()?.trim().parse().ok()?;
         Some(kb * 1024)
     }
 
@@ -2320,6 +2277,28 @@ pub fn cmd_get_memory_usage(state: State<AppState>) -> Option<u64> {
         let _ = pid;
         None
     }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_tun_core_pid(pid: libc::pid_t, depth: u8) -> Option<libc::pid_t> {
+    let mut path = [0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: Both libproc calls get writable buffers with their byte lengths.
+    let len = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+    if len > 0
+        && std::ffi::CStr::from_bytes_until_nul(&path)
+            .is_ok_and(|path| path.to_bytes() == crate::tun::TUN_ROOT_BIN.as_bytes())
+    {
+        return Some(pid);
+    }
+    if depth == 0 {
+        return None;
+    }
+    let mut children = [0; 16];
+    let count = unsafe {
+        libc::proc_listchildpids(pid, children.as_mut_ptr().cast(), std::mem::size_of_val(&children) as i32)
+    };
+    children.iter().take(count.max(0) as usize)
+        .find_map(|&child| macos_tun_core_pid(child, depth - 1))
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────

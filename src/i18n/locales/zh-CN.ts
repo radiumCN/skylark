@@ -62,7 +62,7 @@ export default {
     globalMode: "全局代理",
     directMode: "直连模式",
     uptime: "运行时长",
-    memory: "内存 {value}",
+    memory: "内核内存 {value}",
     networkSettings: "网络设置",
     connecting: "连接中…",
     disconnecting: "断开中…",

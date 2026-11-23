@@ -1,7 +1,8 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { enable, disable, isEnabled } from "@tauri-apps/plugin-autostart";
 import { register, unregisterAll } from "@tauri-apps/plugin-global-shortcut";
 import { detectLocale, i18n } from "../i18n";
@@ -15,6 +16,10 @@ export interface SingboxStatus {
   uptime?: number;
   pid?: number;
   version?: string;
+  traffic?: {
+    totals: { upload: number; download: number };
+    rate: { up: number; down: number };
+  };
 }
 
 export interface Subscription {
@@ -102,12 +107,6 @@ export interface AppConfig {
   enable_global_shortcuts: boolean;
 }
 
-export interface TrafficPoint {
-  time: number;
-  upload: number;
-  download: number;
-}
-
 export const useAppStore = defineStore("app", () => {
   const status = ref<SingboxStatus>({ running: false });
   const subscriptions = ref<Subscription[]>([]);
@@ -144,13 +143,7 @@ export const useAppStore = defineStore("app", () => {
     subscription_user_agent: "v2rayN/6.45",
     enable_global_shortcuts: false,
   });
-  const trafficHistory = ref<TrafficPoint[]>([]);
-  // Cumulative bytes since the core started (authoritative, from the Clash API).
-  const totalUpload = ref(0);
-  const totalDownload = ref(0);
-  // Live speed in bytes/s, derived from the per-second delta of the totals above.
-  const uploadSpeed = ref(0);
-  const downloadSpeed = ref(0);
+  const windowVisible = ref(false);
   const loading = ref(false);
   // Flips true once the first data load (init) resolves and never flips back, so
   // views can show a loading skeleton on cold start without it re-triggering
@@ -161,9 +154,15 @@ export const useAppStore = defineStore("app", () => {
   // toggles reflect this immediately (flip + "连接中…") while the core (re)starts in
   // the background, then reconcile to the real runtime state on completion.
   const connecting = ref<null | "system" | "tun" | "off">(null);
-  // Whether the Windows system proxy registry toggle is currently on. Kept in the store
-  // (refreshed by the global traffic poller) so any view can derive `proxying`.
   const systemProxyEnabled = ref(false);
+  const runtimeProxying = computed(
+    () => status.value.running && (status.value.tun_active === true || systemProxyEnabled.value),
+  );
+  const traffic = computed(() => runtimeProxying.value ? status.value.traffic : undefined);
+  const totalUpload = computed(() => traffic.value?.totals.upload ?? 0);
+  const totalDownload = computed(() => traffic.value?.totals.download ?? 0);
+  const uploadSpeed = computed(() => traffic.value?.rate.up ?? 0);
+  const downloadSpeed = computed(() => traffic.value?.rate.down ?? 0);
 
   // With the persistent-core model the core is almost always running while the app is
   // open, so "core running" no longer means "actively proxying". `proxying` is the real
@@ -173,22 +172,26 @@ export const useAppStore = defineStore("app", () => {
   const proxying = computed(() => {
     if (connecting.value === "system" || connecting.value === "tun") return true;
     if (connecting.value === "off") return false;
-    // Derive from the backend's authoritative runtime state — the core is actually in TUN
-    // mode, or the system proxy registry toggle is on — NOT from the persisted
-    // config.tun_enabled preference (which the Settings toggle can flip on without ever
-    // establishing a tunnel, falsely showing "connected" while traffic goes direct).
-    return status.value.running && (status.value.tun_active === true || systemProxyEnabled.value);
+    return runtimeProxying.value;
   });
 
-  // Wall-clock ms at which the current proxy session began (off → on), or null while not
-  // proxying. Owned by the app-scoped traffic poller so it survives page navigation — the
-  // dashboard derives "运行时长" from it instead of from a component-local timer that would
-  // reset on every remount.
   const proxySessionStartMs = ref<number | null>(null);
+  watch([runtimeProxying, connecting], ([active, target]) => {
+    if (target !== null) return;
+    if (active) {
+      proxySessionStartMs.value ??= Date.now();
+    } else {
+      proxySessionStartMs.value = null;
+    }
+    updateTrayTooltip();
+  });
 
+  let systemProxyRequest = 0;
   async function refreshSystemProxy() {
+    const request = ++systemProxyRequest;
     try {
-      systemProxyEnabled.value = await invoke<boolean>("cmd_get_system_proxy_status");
+      const enabled = await invoke<boolean>("cmd_get_system_proxy_status");
+      if (request === systemProxyRequest) systemProxyEnabled.value = enabled;
     } catch {
       /* keep last value on a transient error */
     }
@@ -211,9 +214,12 @@ export const useAppStore = defineStore("app", () => {
     return nodes.value.find((n) => n.name === activeTag);
   });
 
+  let statusRequest = 0;
   async function fetchStatus() {
+    const request = ++statusRequest;
     try {
-      status.value = await invoke<SingboxStatus>("cmd_get_singbox_status");
+      const current = await invoke<SingboxStatus>("cmd_get_singbox_status");
+      if (request === statusRequest) status.value = current;
     } catch (e) {
       console.error("fetchStatus error:", e);
     }
@@ -264,9 +270,8 @@ export const useAppStore = defineStore("app", () => {
       await refreshSystemProxy();
       if (target === "off") {
         activeNodeNow.value = null;
-      } else {
-        resetTrafficStats();
-        ensureActiveNowPoller();
+      } else if (windowVisible.value) {
+        void refreshActiveNow();
       }
       syncTrayMenu(systemProxyEnabled.value, config.value.tun_enabled);
       updateTrayTooltip();
@@ -519,157 +524,66 @@ export const useAppStore = defineStore("app", () => {
     await refreshActiveNow();
   }
 
-  // ── Single shared poller for the active auto group's current node ───────────
-  // One app-lifetime timer (idempotent) instead of per-page timers. refreshActiveNow
-  // self-noops when the proxy is stopped or no auto group is selected, so the timer
-  // does no network work unless it's actually needed.
-  let activeNowTimer: ReturnType<typeof setInterval> | null = null;
-  function ensureActiveNowPoller() {
-    if (activeNowTimer) return;
-    refreshActiveNow();
-    activeNowTimer = setInterval(refreshActiveNow, 3000);
-  }
+  async function initWindowVisibility() {
+    const mainWindow = getCurrentWindow();
+    let latestCheck = 0;
 
-  // ── Global traffic monitor ─────────────────────────────────────────────────
-  // The cumulative totals come straight from the core (Clash API /connections
-  // totals), so they count ALL traffic since the proxy service started and keep
-  // counting no matter which page is open — fixing the old behaviour where totals
-  // only accrued while the dashboard was visible. Live speed is the per-second
-  // delta. The core resets its counters on restart, so a drop in the cumulative
-  // value is treated as a fresh baseline rather than a (nonsensical) negative speed.
-  let trafficTimer: ReturnType<typeof setInterval> | null = null;
-  let lastUpTotal = 0;
-  let lastDownTotal = 0;
-  let trafficWasRunning = false;
-  // Bytes accumulated since the last persistent-history flush. The poller runs every
-  // second; we batch ~30s of deltas into one disk write to keep history I/O cheap.
-  let pendingUp = 0;
-  let pendingDown = 0;
-  let flushCountdown = 30;
-
-  async function flushTrafficHistory() {
-    if (pendingUp === 0 && pendingDown === 0) return;
-    const up = pendingUp;
-    const down = pendingDown;
-    pendingUp = 0;
-    pendingDown = 0;
-    try {
-      await invoke("cmd_add_traffic_sample", { upload: up, download: down });
-    } catch {
-      // On failure, fold the bytes back so they aren't lost before the next flush.
-      pendingUp += up;
-      pendingDown += down;
-    }
-  }
-
-  // Guards against re-entrant ticks: each poll awaits three IPC round-trips, so under a slow
-  // core a 1s interval can fire again before the previous run finishes. Overlapping runs would
-  // read the same stale baseline and both record a large delta, inflating live speed and the
-  // persistent daily history. Drop a tick if the previous one is still in flight.
-  let trafficPolling = false;
-  async function pollTraffic() {
-    if (trafficPolling) return;
-    trafficPolling = true;
-    try {
-      await pollTrafficInner();
-    } finally {
-      trafficPolling = false;
-    }
-  }
-
-  async function pollTrafficInner() {
-    // Refresh status + system proxy here so the monitor reacts to changes from anywhere
-    // (dashboard, tray, auto-restore) without depending on a mounted page.
-    await fetchStatus();
-    await refreshSystemProxy();
-
-    // With the persistent core, "proxying" — not "core running" — is what gates traffic.
-    // Use the backend's authoritative tun_active, not the persisted config.tun_enabled.
-    const proxyingNow =
-      status.value.running && (status.value.tun_active === true || systemProxyEnabled.value);
-
-    if (!proxyingNow) {
-      if (trafficWasRunning) {
-        // Persist whatever accrued in this session before tearing down counters.
-        await flushTrafficHistory();
-        uploadSpeed.value = 0;
-        downloadSpeed.value = 0;
-        totalUpload.value = 0;
-        totalDownload.value = 0;
-        lastUpTotal = 0;
-        lastDownTotal = 0;
-        trafficWasRunning = false;
+    async function refreshVisibility() {
+      const check = ++latestCheck;
+      if (document.hidden) {
+        windowVisible.value = false;
+        return;
       }
-      // Freeze the session timer whenever not proxying (independent of the traffic flag).
-      proxySessionStartMs.value = null;
-      return;
+      const visible = await Promise.all([mainWindow.isVisible(), mainWindow.isMinimized()])
+        .then(([shown, minimized]) => shown && !minimized)
+        .catch(() => !document.hidden);
+      if (check === latestCheck) windowVisible.value = visible;
     }
 
-    // Transition not-proxying → proxying: reset baseline and chart for a clean session.
-    if (!trafficWasRunning) {
-      lastUpTotal = 0;
-      lastDownTotal = 0;
-      clearTrafficHistory();
-      trafficWasRunning = true;
-    }
-    // Start the session clock on the first proxying poll and keep it across core restarts
-    // (e.g. an auto-group switch) — only a real off → on transition clears it above.
-    if (proxySessionStartMs.value === null) {
-      proxySessionStartMs.value = Date.now();
-    }
-
-    let up = 0;
-    let down = 0;
-    try {
-      const t = await invoke<{ upload: number; download: number }>("cmd_get_traffic_total");
-      up = t.upload;
-      down = t.download;
-    } catch {
-      // Keep last good values on a transient API hiccup.
-      return;
-    }
-
-    // Clamp negatives caused by a core counter reset.
-    const upDelta = up >= lastUpTotal ? up - lastUpTotal : up;
-    const downDelta = down >= lastDownTotal ? down - lastDownTotal : down;
-    lastUpTotal = up;
-    lastDownTotal = down;
-
-    uploadSpeed.value = upDelta;
-    downloadSpeed.value = downDelta;
-    totalUpload.value = up;
-    totalDownload.value = down;
-    addTrafficPoint(upDelta, downDelta);
-
-    // Accumulate for the persistent daily history; flush in ~30s batches.
-    pendingUp += upDelta;
-    pendingDown += downDelta;
-    if (--flushCountdown <= 0) {
-      flushCountdown = 30;
-      await flushTrafficHistory();
-    }
+    document.addEventListener("visibilitychange", refreshVisibility);
+    await Promise.allSettled([
+      listen("main-window-visibility-changed", refreshVisibility),
+      mainWindow.onFocusChanged(refreshVisibility),
+    ]);
+    await refreshVisibility();
   }
 
-  function ensureTrafficPoller() {
-    if (trafficTimer) return;
-    pollTraffic();
-    trafficTimer = setInterval(pollTraffic, 1000);
-  }
+  // Native collection continues with the window hidden. Only visible UI consumes IPC
+  // updates or queries the active auto group and operating system proxy state.
+  let refreshingStatus = false;
+  let refreshingDetails = false;
+  watch(windowVisible, (visible, _, onCleanup) => {
+    if (!visible) return;
 
-  // Immediately clear cumulative stats, live speed, the chart and the monitor's
-  // baseline. Called on every (re)start of the core so a new proxy session always
-  // begins counting from zero instead of inheriting the previous session's totals.
-  function resetTrafficStats() {
-    totalUpload.value = 0;
-    totalDownload.value = 0;
-    uploadSpeed.value = 0;
-    downloadSpeed.value = 0;
-    lastUpTotal = 0;
-    lastDownTotal = 0;
-    clearTrafficHistory();
-    // Align the monitor's flag so its transition logic won't double-reset.
-    trafficWasRunning = proxying.value;
-  }
+    async function refreshStatus() {
+      if (refreshingStatus) return;
+      refreshingStatus = true;
+      try {
+        await fetchStatus();
+      } finally {
+        refreshingStatus = false;
+      }
+    }
+    async function refreshDetails() {
+      if (refreshingDetails) return;
+      refreshingDetails = true;
+      try {
+        await refreshSystemProxy();
+        if (windowVisible.value && runtimeProxying.value) await refreshActiveNow();
+      } finally {
+        refreshingDetails = false;
+      }
+    }
+
+    void refreshStatus();
+    void refreshDetails();
+    const statusTimer = setInterval(refreshStatus, 1000);
+    const detailTimer = setInterval(refreshDetails, 5000);
+    onCleanup(() => {
+      clearInterval(statusTimer);
+      clearInterval(detailTimer);
+    });
+  });
 
   async function fetchTrafficHistory(days?: number): Promise<TrafficDay[]> {
     return await invoke<TrafficDay[]>("cmd_get_traffic_history", { days: days ?? null });
@@ -738,21 +652,12 @@ export const useAppStore = defineStore("app", () => {
     }
   }
 
-  function addTrafficPoint(upload: number, download: number) {
-    trafficHistory.value.push({ time: Date.now(), upload, download });
-    if (trafficHistory.value.length > 60) {
-      trafficHistory.value.shift();
-    }
-  }
-
-  function clearTrafficHistory() {
-    trafficHistory.value = [];
-  }
-
   async function init() {
     try {
       await Promise.all([
+        listenTrayConnectionEvents().catch((e) => console.error("tray event listener setup failed:", e)),
         fetchStatus(),
+        refreshSystemProxy(),
         fetchSubscriptions(),
         fetchNodes(),
         fetchConfig(),
@@ -773,14 +678,7 @@ export const useAppStore = defineStore("app", () => {
       console.error("autostart reconcile failed:", e);
     }
     updateTrayTooltip();
-    // Start the app-lifetime traffic monitor so cumulative stats are tracked
-    // regardless of which page the user is viewing.
-    ensureTrafficPoller();
-    // React to connection-mode changes driven from the tray menu. The tray mutates
-    // the system proxy / TUN core directly in the backend; without these listeners the
-    // dashboard's reactive state (especially config.tun_enabled, which no poller
-    // refreshes) would stay stale, and tray-side failures would be invisible.
-    await listenTrayConnectionEvents();
+    await initWindowVisibility();
     // Register global hotkeys if the user has enabled them.
     await applyGlobalShortcuts(config.value.enable_global_shortcuts);
   }
@@ -820,7 +718,6 @@ export const useAppStore = defineStore("app", () => {
     fetchProxyGroups,
     saveProxyGroups,
     config,
-    trafficHistory,
     totalUpload,
     totalDownload,
     uploadSpeed,
@@ -830,6 +727,7 @@ export const useAppStore = defineStore("app", () => {
     error,
     connecting,
     systemProxyEnabled,
+    windowVisible,
     proxying,
     proxySessionStartMs,
     refreshSystemProxy,
@@ -857,16 +755,12 @@ export const useAppStore = defineStore("app", () => {
     activeProxyTag,
     activeNodeNow,
     refreshActiveNow,
-    ensureActiveNowPoller,
-    ensureTrafficPoller,
     testGroupDelay,
     testNodeLatency,
     testNodeSpeed,
     fetchConfig,
     saveConfig,
     setProxyMode,
-    addTrafficPoint,
-    clearTrafficHistory,
     updateTrayTooltip,
     init,
   };
